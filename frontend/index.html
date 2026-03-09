@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aegis Arena</title>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:         #050810;
+      --grid:       #0d2035;
+      --tile-empty: #0a1520;
+      --tile-cover: #0a2a12;
+      --tile-energy:#1a1200;
+      --tile-trap:  #1a0000;
+      --agent1:     #00d4ff;
+      --agent2:     #ff3333;
+      --accent:     #ffffff;
+      --hud-bg:     rgba(5,10,20,0.85);
+      --hud-border: #1a3a5c;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      overflow: hidden;
+      font-family: 'Rajdhani', sans-serif;
+      color: var(--accent);
+    }
+
+    #canvas-container { position: fixed; inset: 0; z-index: 0; }
+    #css2d-container { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+
+    /* ─── Agent Panels ─── */
+    .agent-panel {
+      position: absolute;
+      top: 16px;
+      width: 290px;
+      padding: 14px 18px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      border-radius: 6px;
+      z-index: 10;
+      transform: translateX(-120%);
+      transition: transform 0.6s cubic-bezier(0.22,1,0.36,1);
+    }
+    .agent-panel.visible { transform: translateX(0); }
+    .agent-panel.cyan  { left: 16px;  box-shadow: 0 0 18px rgba(0,212,255,0.15); border-color: rgba(0,212,255,0.35); }
+    .agent-panel.red   { right: 16px; left: auto; transform: translateX(120%); box-shadow: 0 0 18px rgba(255,51,51,0.15); border-color: rgba(255,51,51,0.35); }
+    .agent-panel.red.visible { transform: translateX(0); }
+
+    .agent-name {
+      font-weight: 700;
+      font-size: 1.1rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .cyan .agent-name { color: var(--agent1); }
+    .red  .agent-name { color: var(--agent2); }
+
+    .algo-tag {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .cyan .algo-tag { background: rgba(0,212,255,0.15); color: var(--agent1); }
+    .red  .algo-tag { background: rgba(255,51,51,0.15); color: var(--agent2); }
+
+    .stat-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 5px;
+      font-size: 0.9rem;
+    }
+    .stat-row > span:first-child { width: 24px; text-align: center; }
+    .stat-row > span:last-child  { width: 64px; text-align: right; font-size: 0.8rem; opacity: 0.8; }
+
+    .bar {
+      flex: 1;
+      height: 10px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .bar .fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.4s ease, background 0.4s ease;
+    }
+    .hp-bar .fill  { background: #00ff44; }
+    .en-bar .fill  { background: #ffcc00; }
+
+    .cooldowns {
+      display: flex;
+      gap: 10px;
+      margin-top: 6px;
+      font-size: 1.1rem;
+    }
+    .cd-icon {
+      position: relative;
+      opacity: 1;
+      transition: opacity 0.3s;
+    }
+    .cd-icon.on-cd {
+      opacity: 0.25;
+    }
+    .cd-icon .cd-num {
+      position: absolute;
+      top: -4px; right: -6px;
+      font-size: 0.55rem;
+      font-weight: 700;
+      background: rgba(0,0,0,0.7);
+      padding: 0 3px;
+      border-radius: 2px;
+    }
+
+    .ai-stats {
+      margin-top: 6px;
+      font-size: 0.72rem;
+      color: rgba(255,255,255,0.45);
+      letter-spacing: 0.04em;
+    }
+
+    .status-effects {
+      margin-top: 4px;
+      font-size: 0.75rem;
+      display: flex;
+      gap: 8px;
+    }
+    .status-effects .burn  { color: #ff8800; }
+    .status-effects .slow  { color: #4488ff; }
+
+    /* ─── Turn Indicator ─── */
+    #turn-indicator {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 28px;
+      backdrop-filter: blur(8px);
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      border-radius: 6px;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      z-index: 10;
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.4s;
+    }
+    #turn-indicator.visible { opacity: 1; }
+    #turn-indicator .blink-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      margin-left: 8px;
+      vertical-align: middle;
+      animation: blink 1s infinite;
+    }
+    @keyframes blink { 0%,100%{ opacity:1; } 50%{ opacity:0.2; } }
+
+    /* ─── Speed Controls ─── */
+    #speed-controls {
+      position: absolute;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      gap: 6px;
+      z-index: 10;
+    }
+    #speed-controls.visible { display: flex; }
+    #speed-controls button {
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      color: var(--accent);
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 600;
+      font-size: 0.8rem;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    #speed-controls button:hover { background: rgba(0,212,255,0.1); border-color: var(--agent1); }
+    #speed-controls button.active { background: rgba(0,212,255,0.2); border-color: var(--agent1); }
+
+    /* ─── Action Log ─── */
+    #action-log {
+      position: absolute;
+      bottom: 16px;
+      left: 16px;
+      width: 340px;
+      max-height: 200px;
+      overflow: hidden;
+      padding: 10px 14px;
+      backdrop-filter: blur(8px);
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      border-radius: 6px;
+      z-index: 10;
+      font-size: 0.78rem;
+      font-family: 'Rajdhani', monospace;
+      opacity: 0;
+      transition: opacity 0.4s;
+    }
+    #action-log.visible { opacity: 1; }
+    #action-log .log-title {
+      font-weight: 700;
+      font-size: 0.82rem;
+      margin-bottom: 6px;
+      letter-spacing: 0.06em;
+      color: rgba(255,255,255,0.5);
+    }
+    .log-entry {
+      padding: 2px 0;
+      transition: opacity 0.5s;
+    }
+    .log-entry:nth-child(n+6) { opacity: 0.5; }
+    .log-entry:nth-child(n+8) { opacity: 0.3; }
+    .log-entry .turn-num { color: rgba(255,255,255,0.35); }
+    .log-entry .agent-tag-cyan { color: var(--agent1); }
+    .log-entry .agent-tag-red  { color: var(--agent2); }
+
+    /* ─── Action Panel (Human) ─── */
+    #action-panel {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(140%);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 14px 22px;
+      backdrop-filter: blur(8px);
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      border-radius: 8px;
+      z-index: 10;
+      transition: transform 0.5s cubic-bezier(0.22,1,0.36,1);
+    }
+    #action-panel.visible { transform: translateX(-50%) translateY(0); }
+
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 48px);
+      grid-template-rows: repeat(3, 48px);
+      gap: 3px;
+    }
+    .dpad button {
+      width: 48px; height: 48px;
+      background: rgba(10,20,35,0.9);
+      border: 1px solid var(--hud-border);
+      color: var(--accent);
+      font-size: 1.2rem;
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: transform 0.1s, background 0.2s;
+    }
+    .dpad button:hover { background: rgba(0,212,255,0.12); transform: scale(1.05); }
+    .dpad button:active { transform: scale(0.95); }
+    .dpad button:disabled { opacity: 0.2; pointer-events: none; }
+    .dpad .empty-cell { visibility: hidden; }
+
+    .action-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .action-buttons button {
+      width: 140px; height: 42px;
+      background: rgba(10,20,35,0.9);
+      border: 1px solid var(--hud-border);
+      color: var(--accent);
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+      border-radius: 4px;
+      cursor: pointer;
+      letter-spacing: 0.06em;
+      transition: transform 0.1s, background 0.2s, box-shadow 0.3s;
+    }
+    .action-buttons button:hover { background: rgba(0,212,255,0.12); transform: scale(1.05); box-shadow: 0 0 12px rgba(0,212,255,0.2); }
+    .action-buttons button:active { transform: scale(0.95); }
+    .action-buttons button:disabled { opacity: 0.4; pointer-events: none; }
+    .action-buttons button .tooltip {
+      display: none;
+      position: absolute;
+      bottom: 110%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.85);
+      padding: 4px 8px;
+      border-radius: 3px;
+      font-size: 0.7rem;
+      white-space: nowrap;
+    }
+    .action-buttons button:disabled:hover .tooltip { display: block; }
+
+    /* ─── Menu Screen ─── */
+    #menu-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(5,8,16,0.88);
+      backdrop-filter: blur(4px);
+      transition: opacity 0.6s;
+    }
+    #menu-screen.hidden { opacity: 0; pointer-events: none; }
+
+    .menu-title {
+      font-size: 5.5rem;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      color: #fff;
+      text-shadow: 0 0 30px rgba(0,212,255,0.3);
+      animation: glitch 6s infinite;
+      position: relative;
+    }
+    @keyframes glitch {
+      0%,90%,100% { transform: none; text-shadow: 0 0 30px rgba(0,212,255,0.3); }
+      91% { transform: skewX(-3deg) translateX(4px); text-shadow: -3px 0 #ff3333, 3px 0 #00d4ff; }
+      93% { transform: skewX(2deg) translateX(-2px); text-shadow: 2px 0 #ff3333, -2px 0 #00d4ff; }
+      95% { transform: none; text-shadow: 0 0 30px rgba(0,212,255,0.3); }
+    }
+
+    .menu-subtitle {
+      font-size: 0.9rem;
+      font-weight: 600;
+      letter-spacing: 0.35em;
+      color: #4488aa;
+      text-transform: uppercase;
+      margin-top: 4px;
+      margin-bottom: 50px;
+    }
+
+    .menu-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 340px;
+    }
+    .menu-btn {
+      width: 100%;
+      padding: 16px 20px;
+      background: rgba(10,20,35,0.9);
+      border: 1px solid var(--hud-border);
+      color: var(--accent);
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 1.15rem;
+      letter-spacing: 0.1em;
+      border-radius: 6px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: transform 0.15s, background 0.25s, box-shadow 0.3s, border-color 0.3s;
+    }
+    .menu-btn:hover { transform: scale(1.03); }
+    .menu-btn:active { transform: scale(0.97); }
+    .menu-btn.cyan-border { border-color: rgba(0,212,255,0.5); }
+    .menu-btn.cyan-border:hover { box-shadow: 0 0 22px rgba(0,212,255,0.25); background: rgba(0,212,255,0.08); }
+    .menu-btn.red-border  { border-color: rgba(255,51,51,0.5); }
+    .menu-btn.red-border:hover  { box-shadow: 0 0 22px rgba(255,51,51,0.25); background: rgba(255,51,51,0.08); }
+
+    .side-select {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      margin-top: 20px;
+    }
+    .side-select.visible { display: flex; }
+    .side-select-title {
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      color: rgba(255,255,255,0.6);
+    }
+    .side-btns { display: flex; gap: 14px; }
+    .side-btn {
+      padding: 14px 24px;
+      background: rgba(10,20,35,0.9);
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      transition: transform 0.15s, box-shadow 0.3s, background 0.25s;
+    }
+    .side-btn:hover { transform: scale(1.04); }
+    .side-btn.cyan { border: 1px solid rgba(0,212,255,0.5); }
+    .side-btn.cyan:hover { box-shadow: 0 0 18px rgba(0,212,255,0.3); background: rgba(0,212,255,0.08); }
+    .side-btn.red  { border: 1px solid rgba(255,51,51,0.5); }
+    .side-btn.red:hover  { box-shadow: 0 0 18px rgba(255,51,51,0.3); background: rgba(255,51,51,0.08); }
+
+    /* ─── Game Over Overlay ─── */
+    #game-over {
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(5,8,16,0.92);
+      backdrop-filter: blur(6px);
+    }
+    #game-over.visible { display: flex; }
+    #game-over .winner-text {
+      font-size: 3.5rem;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      animation: glitch 4s infinite;
+    }
+    #game-over .final-stats {
+      margin-top: 16px;
+      font-size: 0.9rem;
+      color: rgba(255,255,255,0.55);
+      text-align: center;
+      line-height: 1.6;
+    }
+    #game-over .play-again-btn {
+      margin-top: 36px;
+      padding: 14px 48px;
+      background: rgba(10,20,35,0.9);
+      border: 1px solid var(--agent1);
+      color: var(--accent);
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 1.1rem;
+      letter-spacing: 0.1em;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.3s;
+    }
+    #game-over .play-again-btn:hover { transform: scale(1.04); box-shadow: 0 0 20px rgba(0,212,255,0.3); }
+
+    /* ─── Damage Number ─── */
+    .damage-label {
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 1.4rem;
+      pointer-events: none;
+      text-shadow: 0 0 6px rgba(0,0,0,0.8);
+      animation: floatUp 1.2s forwards;
+    }
+    .damage-label.red  { color: #ff2200; }
+    .damage-label.green { color: #00ff44; }
+    @keyframes floatUp {
+      0%   { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-60px); }
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  <div id="css2d-container"></div>
+
+  <!-- HUD — injected by JS but the containers are here -->
+  <div id="panel-a1" class="agent-panel cyan"></div>
+  <div id="panel-a2" class="agent-panel red"></div>
+  <div id="turn-indicator"></div>
+  <div id="speed-controls">
+    <button data-speed="1600">0.5×</button>
+    <button data-speed="800" class="active">1×</button>
+    <button data-speed="400">2×</button>
+  </div>
+  <div id="action-log"></div>
+  <div id="action-panel"></div>
+
+  <!-- Game Over -->
+  <div id="game-over">
+    <div class="winner-text" id="winner-text"></div>
+    <div class="final-stats" id="final-stats"></div>
+    <button class="play-again-btn" id="play-again-btn">PLAY AGAIN</button>
+  </div>
+
+  <!-- Menu -->
+  <div id="menu-screen">
+    <div class="menu-title">AEGIS ARENA</div>
+    <div class="menu-subtitle">ADVERSARIAL AI COMBAT SIMULATION</div>
+    <div class="menu-buttons" id="menu-buttons">
+      <button class="menu-btn cyan-border" id="btn-ai-vs-ai">&#9876;  AI vs AI</button>
+      <button class="menu-btn red-border" id="btn-human-vs-ai">&#127918;  Human vs AI</button>
+    </div>
+    <div class="side-select" id="side-select">
+      <div class="side-select-title">CHOOSE YOUR SIDE</div>
+      <div class="side-btns">
+        <button class="side-btn cyan" id="side-agent1">AGENT &#945; — MINIMAX — CYAN</button>
+        <button class="side-btn red" id="side-agent2">AGENT &#946; — MCTS — RED</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+      "three/": "https://cdn.jsdelivr.net/npm/three@0.128.0/"
+    }
+  }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
