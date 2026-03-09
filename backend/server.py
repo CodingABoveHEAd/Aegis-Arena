@@ -23,12 +23,28 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.game.arena import Arena
-from backend.game.agent import Agent
-from backend.game.state import GameState
-from backend.game.actions import Action, apply_action, get_valid_actions
-from backend.ai.minimax import MinimaxAgent
-from backend.ai.mcts import MCTSAgent
+try:
+    from backend.game.arena import Arena
+    from backend.game.agent import Agent
+    from backend.game.state import GameState
+    from backend.game.actions import Action, apply_action, get_valid_actions
+    from backend.ai.minimax import MinimaxAgent
+    from backend.ai.mcts import MCTSAgent
+except ImportError:
+    try:
+        from game.arena import Arena
+        from game.agent import Agent
+        from game.state import GameState
+        from game.actions import Action, apply_action, get_valid_actions
+        from ai.minimax import MinimaxAgent
+        from ai.mcts import MCTSAgent
+    except ImportError:
+        from arena import Arena
+        from agent import Agent
+        from state import GameState
+        from actions import Action, apply_action, get_valid_actions
+        from minimax import MinimaxAgent
+        from mcts import MCTSAgent
 
 
 # ---------------------------------------------------------------------------
