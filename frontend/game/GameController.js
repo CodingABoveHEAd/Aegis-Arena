@@ -5,6 +5,7 @@
  * Human-vs-AI (turn-by-turn REST) modes.
  */
 
+import * as THREE from 'three';
 import { APIClient } from './APIClient.js';
 
 const MAX_HP = 100;
