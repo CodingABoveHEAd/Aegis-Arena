@@ -19,9 +19,10 @@ class TileType(enum.Enum):
     """Enumeration of tile types on the arena grid."""
 
     EMPTY = "EMPTY"
-    COVER = "COVER"      # Reduces incoming damage by 40 %
-    ENERGY = "ENERGY"    # Restores 20 energy per turn tick
-    TRAP = "TRAP"        # Deals 10 damage on first step; respawns after 3 turns
+    COVER = "COVER"        # Reduces incoming damage by 40 %
+    ENERGY = "ENERGY"      # Restores 20 energy per turn tick
+    TRAP = "TRAP"          # Deals 10 damage on first step; respawns after 3 turns
+    ELEVATED = "ELEVATED"  # +20 % damage multiplier when attacking from here
 
 
 # ---------------------------------------------------------------------------
@@ -41,9 +42,12 @@ class Arena:
         grid:            2-D list of ``TileType`` values.
         trap_timers:     Mapping ``(x, y) -> turns_remaining`` for
                          triggered traps currently on cooldown.
+        tile_durability: Mapping ``(x, y) -> hits_remaining`` for
+                         COVER tiles (destroyed after 3 hits).
     """
 
-    TRAP_RESPAWN_TURNS: int = 3  # turns a triggered trap stays empty
+    TRAP_RESPAWN_TURNS: int = 3   # turns a triggered trap stays empty
+    COVER_MAX_DURABILITY: int = 3  # hits before a COVER tile is destroyed
 
     # -- construction -------------------------------------------------------
 
@@ -58,6 +62,7 @@ class Arena:
             [TileType.EMPTY for _ in range(size)] for _ in range(size)
         ]
         self.trap_timers: Dict[Tuple[int, int], int] = {}
+        self.tile_durability: Dict[Tuple[int, int], int] = {}
         self._place_tiles()
 
     # -- fixed symmetric layout ---------------------------------------------
@@ -82,10 +87,17 @@ class Arena:
         trap_positions: List[Tuple[int, int]] = [
             (1, 4), (3, 1),
         ]
+        # 4 ELEVATED tiles (2 pairs)
+        elevated_positions: List[Tuple[int, int]] = [
+            (0, 6), (2, 3),
+        ]
 
         for r, c in cover_positions:
             self.grid[r][c] = TileType.COVER
             self.grid[s - r][s - c] = TileType.COVER  # diagonal mirror
+            # Initialise cover durability
+            self.tile_durability[(r, c)] = self.COVER_MAX_DURABILITY
+            self.tile_durability[(s - r, s - c)] = self.COVER_MAX_DURABILITY
 
         for r, c in energy_positions:
             self.grid[r][c] = TileType.ENERGY
@@ -94,6 +106,10 @@ class Arena:
         for r, c in trap_positions:
             self.grid[r][c] = TileType.TRAP
             self.grid[s - r][s - c] = TileType.TRAP
+
+        for r, c in elevated_positions:
+            self.grid[r][c] = TileType.ELEVATED
+            self.grid[s - r][s - c] = TileType.ELEVATED
 
     # -- queries ------------------------------------------------------------
 
@@ -143,6 +159,45 @@ class Arena:
             for dx, dy in directions
             if self.is_valid(x + dx, y + dy)
         ]
+
+    # -- cover durability ---------------------------------------------------
+
+    def damage_cover(self, x: int, y: int) -> bool:
+        """Reduce durability of a COVER tile. Destroys it when depleted.
+
+        Args:
+            x: Row index of the COVER tile.
+            y: Column index of the COVER tile.
+
+        Returns:
+            ``True`` if the cover tile was destroyed by this hit.
+        """
+        key = (x, y)
+        if key not in self.tile_durability:
+            return False
+        self.tile_durability[key] -= 1
+        if self.tile_durability[key] <= 0:
+            self.grid[x][y] = TileType.EMPTY
+            del self.tile_durability[key]
+            return True
+        return False
+
+    # -- elevation helper ---------------------------------------------------
+
+    @staticmethod
+    def elevation_multiplier(attacker_tile: TileType) -> float:
+        """Return the damage multiplier for attacking from *attacker_tile*.
+
+        ELEVATED tiles grant a +20 % bonus (multiplier 1.2); all other
+        tiles return 1.0.
+
+        Args:
+            attacker_tile: The ``TileType`` the attacker is standing on.
+
+        Returns:
+            A float multiplier (>= 1.0).
+        """
+        return 1.2 if attacker_tile == TileType.ELEVATED else 1.0
 
     # -- trap lifecycle -----------------------------------------------------
 
@@ -211,3 +266,16 @@ if __name__ == "__main__":
     for turn in range(1, 5):
         arena.tick_traps()
         print(f"  After tick {turn}: {arena.get_tile(1, 4).value}  timers={arena.trap_timers}")
+
+    # Cover durability
+    print("\n--- Cover durability ---")
+    arena2 = Arena()
+    for hit in range(1, 5):
+        destroyed = arena2.damage_cover(1, 2)
+        tile = arena2.get_tile(1, 2).value
+        print(f"  Hit {hit}: destroyed={destroyed}, tile={tile}")
+
+    # Elevation multiplier
+    print("\n--- Elevation multiplier ---")
+    print(f"  ELEVATED: {Arena.elevation_multiplier(TileType.ELEVATED)}")
+    print(f"  EMPTY:    {Arena.elevation_multiplier(TileType.EMPTY)}")
