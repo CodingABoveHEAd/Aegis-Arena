@@ -9,10 +9,9 @@ energy-tile bonus).
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Dict, Tuple
+from typing import Dict, Tuple
 
-if TYPE_CHECKING:
-    from .arena import Arena, TileType  # avoid circular import at runtime
+from .arena import Arena, TileType
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +127,6 @@ class Agent:
         Args:
             arena: The game arena (used to check the tile under the agent).
         """
-        from .arena import TileType  # local import to avoid circular dependency
-
         # --- Cooldown ticking ---
         if self.skill_cooldown > 0:
             self.skill_cooldown -= 1
