@@ -72,8 +72,10 @@ class GameState:
         return (
             a1.hp, a1.energy, a1.position, a1.shield_active,
             a1.skill_cooldown, a1.shield_cooldown,
+            a1.burn_turns, a1.slow_active,
             a2.hp, a2.energy, a2.position, a2.shield_active,
             a2.skill_cooldown, a2.shield_cooldown,
+            a2.burn_turns, a2.slow_active,
             self.current_agent,
             self.turn_count,
         )

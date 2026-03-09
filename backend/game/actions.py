@@ -245,8 +245,8 @@ def _apply_move(actor: Agent, action: Action, arena: Arena) -> None:
 def _apply_basic_attack(actor: Agent, opponent: Agent, arena: Arena) -> None:
     """Execute a basic attack against the opponent.
 
-    Damage: 15 (from ACTION_PROPS).
-    Cover is checked on the *opponent's* tile.
+    Damage: 15 (from ACTION_PROPS), scaled by elevation multiplier.
+    Cover is checked on the *opponent's* tile; cover durability is reduced.
 
     Args:
         actor:    The attacking agent.
@@ -254,8 +254,17 @@ def _apply_basic_attack(actor: Agent, opponent: Agent, arena: Arena) -> None:
         arena:    The game arena.
     """
     props = ACTION_PROPS[Action.BASIC_ATTACK]
-    on_cover: bool = arena.get_tile(*opponent.position) == TileType.COVER
-    opponent.take_damage(props["damage"], on_cover=on_cover)
+    attacker_tile: TileType = arena.get_tile(*actor.position)
+    opponent_tile: TileType = arena.get_tile(*opponent.position)
+    on_cover: bool = opponent_tile == TileType.COVER
+
+    # Elevation bonus: +20 % damage when attacking from ELEVATED tile
+    base_damage: int = int(props["damage"] * Arena.elevation_multiplier(attacker_tile))
+    opponent.take_damage(base_damage, on_cover=on_cover)
+
+    # Reduce cover durability if opponent was behind cover
+    if on_cover:
+        arena.damage_cover(*opponent.position)
 
 
 def _apply_shield(actor: Agent) -> None:
@@ -276,8 +285,8 @@ def _apply_special_skill(
 ) -> None:
     """Fire the special skill at the opponent.
 
-    Damage: 35, Energy cost: 40, sets skill_cooldown to 5.
-    Cover is checked on the *opponent's* tile.
+    Damage: 35 (scaled by elevation), Energy cost: 40, skill_cooldown = 5.
+    Cover is checked on the *opponent's* tile.  Applies 2-turn burn DoT.
 
     Args:
         actor:    The acting agent.
@@ -285,10 +294,22 @@ def _apply_special_skill(
         arena:    The game arena.
     """
     props = ACTION_PROPS[Action.SPECIAL_SKILL]
-    on_cover: bool = arena.get_tile(*opponent.position) == TileType.COVER
-    opponent.take_damage(props["damage"], on_cover=on_cover)
+    attacker_tile: TileType = arena.get_tile(*actor.position)
+    opponent_tile: TileType = arena.get_tile(*opponent.position)
+    on_cover: bool = opponent_tile == TileType.COVER
+
+    # Elevation bonus: +20 % damage when attacking from ELEVATED tile
+    base_damage: int = int(props["damage"] * Arena.elevation_multiplier(attacker_tile))
+    opponent.take_damage(base_damage, on_cover=on_cover)
     actor.energy -= props["energy_cost"]          # deduct 40 energy
     actor.skill_cooldown = props["cooldown"]      # put on 5-turn cooldown
+
+    # Special skill inflicts 2-turn burn (damage-over-time)
+    opponent.burn_turns = 2
+
+    # Reduce cover durability if opponent was behind cover
+    if on_cover:
+        arena.damage_cover(*opponent.position)
 
 
 # ---------------------------------------------------------------------------

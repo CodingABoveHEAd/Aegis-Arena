@@ -28,6 +28,7 @@ SHIELD_DURATION: int = 2       # turns a shield stays active
 SHIELD_COOLDOWN: int = 4       # turns before shield can be used again
 SHIELD_REDUCTION: float = 0.4  # multiplier on incoming damage while shielded
 COVER_REDUCTION: float = 0.4   # multiplier on incoming damage while on cover
+BURN_DAMAGE: int = 5           # damage per tick while burning
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,8 @@ class Agent:
         shield_turns_left: Remaining turns of active shield.
         skill_cooldown:    Turns until the special skill can be used again.
         shield_cooldown:   Turns until the defensive shield can be used again.
+        burn_turns:        Remaining turns of burn DoT (0 = not burning).
+        slow_active:       Whether this agent is slowed (movement restricted).
     """
 
     def __init__(
@@ -72,6 +75,8 @@ class Agent:
         self.shield_turns_left: int = 0
         self.skill_cooldown: int = 0
         self.shield_cooldown: int = 0
+        self.burn_turns: int = 0      # remaining burn DoT ticks
+        self.slow_active: bool = False  # movement restriction flag
 
     # -- combat -------------------------------------------------------------
 
@@ -148,6 +153,15 @@ class Agent:
         if tile == TileType.ENERGY:
             self.restore_energy(ENERGY_TILE_BONUS)
 
+        # --- Burn damage-over-time ---
+        if self.burn_turns > 0:
+            self.hp = max(0, self.hp - BURN_DAMAGE)
+            self.burn_turns -= 1
+
+        # --- Slow wears off each tick ---
+        if self.slow_active:
+            self.slow_active = False
+
     # -- utility ------------------------------------------------------------
 
     def clone(self) -> "Agent":
@@ -173,12 +187,15 @@ class Agent:
             "shield_turns_left": self.shield_turns_left,
             "skill_cooldown": self.skill_cooldown,
             "shield_cooldown": self.shield_cooldown,
+            "burn_turns": self.burn_turns,
+            "slow_active": self.slow_active,
         }
 
     def __repr__(self) -> str:
         return (
             f"Agent({self.name!r}, hp={self.hp}, energy={self.energy}, "
-            f"pos={self.position}, shield={self.shield_active})"
+            f"pos={self.position}, shield={self.shield_active}, "
+            f"burn={self.burn_turns})"
         )
 
 
