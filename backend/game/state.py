@@ -12,8 +12,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
-from .agent import Agent
-from .arena import Arena
+try:
+    from .agent import Agent
+    from .arena import Arena
+except ImportError:  # running as standalone script
+    from agent import Agent  # type: ignore[no-redef]
+    from arena import Arena  # type: ignore[no-redef]
 
 
 class GameState:
@@ -157,8 +161,6 @@ class GameState:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from arena import Arena  # type: ignore[import-untyped]
-
     arena = Arena()
     a1 = Agent("agent1", position=(0, 0))
     a2 = Agent("agent2", position=(7, 7))

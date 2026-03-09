@@ -11,7 +11,10 @@ from __future__ import annotations
 import copy
 from typing import Dict, Tuple
 
-from .arena import Arena, TileType
+try:
+    from .arena import Arena, TileType
+except ImportError:  # running as standalone script
+    from arena import Arena, TileType  # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +187,6 @@ class Agent:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from arena import Arena, TileType  # type: ignore[import-untyped]
-
     arena = Arena()
 
     a = Agent("agent1", position=(0, 0))

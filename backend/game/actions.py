@@ -12,9 +12,14 @@ from __future__ import annotations
 import enum
 from typing import Any, Dict, List, Tuple
 
-from .agent import Agent
-from .arena import Arena, TileType
-from .state import GameState
+try:
+    from .agent import Agent
+    from .arena import Arena, TileType
+    from .state import GameState
+except ImportError:  # running as standalone script
+    from agent import Agent  # type: ignore[no-redef]
+    from arena import Arena, TileType  # type: ignore[no-redef]
+    from state import GameState  # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------
