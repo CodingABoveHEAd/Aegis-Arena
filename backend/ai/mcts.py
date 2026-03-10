@@ -1,38 +1,45 @@
-"""Monte Carlo Tree Search (MCTS) with UCB1 selection.
+"""Monte Carlo Tree Search (MCTS) with PUCT selection.
 
-MCTS avoids the need for a perfect heuristic by estimating state value
-through random simulated playouts (rollouts).  It balances:
+Replaces the original UCB1-based MCTS with a more sophisticated engine
+that incorporates:
 
-* **Exploitation** — choosing moves that have won often
-* **Exploration** — trying less-visited moves (controlled by constant C)
+1. **PUCT (Predictor + UCT)** — selection formula that balances exploit
+   vs explore using a prior visit-count term instead of plain UCB1::
 
-UCB1 formula::
+       Q(s,a) + c_puct × √(N_parent) / (1 + N_child)
 
-    score = wins / visits + C * sqrt(ln(parent.visits) / visits)
+   ``c_puct = 2.0`` by default.
 
-``C = sqrt(2) ≈ 1.414`` is the standard exploration constant.
+2. **Heavy rollouts** — epsilon-greedy (ε = 0.2): with probability
+   (1 − ε) the rollout picks the action with the best heuristic score;
+   with probability ε a uniformly random action is chosen.  This keeps
+   rollouts grounded in realistic play while retaining stochastic
+   diversity.
 
-The four phases, repeated for each iteration:
+3. **Progressive widening** — limits how many children are expanded
+   from a node::
 
-1. **SELECT**        — traverse tree using UCB1 until an unexpanded node
-2. **EXPAND**        — add one new child for an untried action
-3. **SIMULATE**      — playout from the new node until terminal or max depth
-4. **BACKPROPAGATE** — update wins / visits back up to the root
+       children_allowed = max(2, floor(visits ^ 0.6))
+
+   This focuses early search on the most promising branch subset.
+
+4. **Loop detection** — a ``position_history`` counter (positions →
+   visit count) is maintained during rollouts.  Revisiting a position
+   incurs a −0.3 penalty per repeated visit, discouraging back-and-forth
+   shuffling that wastes rollout depth.
+
+5. **Negamax backpropagation** — uses an explicit ``path`` list
+   assembled during the SELECT+EXPAND phase.  Result is negated at
+   each level so every node accumulates value from its own mover's
+   perspective.
+
+6. **Priority-sorted untried actions** — combat actions are explored
+   first (SPECIAL_SKILL > BASIC_ATTACK > DEFENSIVE_SHIELD > moves).
 
 Time complexity note:
-  Each iteration is O(d_select + d_rollout) where d_select is the tree
-  depth and d_rollout is the maximum rollout length.  Total work is
-  O(iterations × (d_select + d_rollout)).  Unlike Minimax, MCTS is
-  anytime — more iterations yield better estimates without guaranteed
-  exhaustive coverage.
-
-Weighted rollout enhancement
------------------------------
-Instead of uniformly random action selection during rollouts, the
-``_weighted_action`` method computes a softmax distribution over the
-top-3 successor states (scored by the heuristic).  This biases
-rollouts toward realistic play, improving result quality while
-retaining stochastic diversity.
+  Each iteration is O(d_select + d_rollout).  Total work is
+  O(iterations × (d_select + d_rollout)).  Default: 1200 iterations,
+  max rollout depth 30.
 """
 
 from __future__ import annotations
@@ -40,8 +47,9 @@ from __future__ import annotations
 import math
 import random
 import time
+from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 try:
     from backend.game.actions import Action, apply_action, get_valid_actions
@@ -72,7 +80,8 @@ class MCTSNode:
         action_taken:     The action that led here from the parent.
         children:         Expanded child nodes.
         visits:           Number of times this node has been visited.
-        wins:             Cumulative reward passed through this node.
+        value:            Cumulative reward (from the node's own mover
+                          perspective after negamax flip).
         untried_actions:  Actions not yet expanded from this node.
     """
 
@@ -81,7 +90,7 @@ class MCTSNode:
     action_taken: Optional[Action] = None
     children: List["MCTSNode"] = field(default_factory=list)
     visits: int = 0
-    wins: float = 0.0
+    value: float = 0.0
     untried_actions: List[Action] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -93,74 +102,60 @@ class MCTSNode:
             actions.sort(key=lambda a: priority.get(a.value, 1))
             self.untried_actions = actions
 
+    @property
+    def q(self) -> float:
+        """Mean value from this node's mover perspective."""
+        return self.value / self.visits if self.visits > 0 else 0.0
+
 
 # ---------------------------------------------------------------------------
 # MCTS Agent
 # ---------------------------------------------------------------------------
 
 class MCTSAgent:
-    """Monte Carlo Tree Search agent with UCB1 selection and weighted rollouts.
+    """MCTS agent with PUCT selection, heavy rollouts, and progressive widening.
 
     Attributes:
         agent_name:        Which side this agent plays.
         iterations:        Number of MCTS iterations per ``choose_action``.
-        exploration_c:     UCB1 exploration constant.
-        max_rollout_depth: Maximum random-playout length.
+        c_puct:            PUCT exploration constant.
+        max_rollout_depth: Maximum heavy-playout length.
+        epsilon:           Probability of choosing a random action in rollout.
+        widen_exp:         Progressive-widening exponent.
+        loop_penalty:      Penalty per revisit during rollout.
         stats:             Per-call performance counters.
     """
 
     # Priority weights for action ordering — combat actions explored first.
-    _ACTION_PRIORITY = {
+    _ACTION_PRIORITY: Dict[str, int] = {
         "SPECIAL_SKILL": 4,
         "BASIC_ATTACK": 3,
         "DEFENSIVE_SHIELD": 2,
     }
 
-    # Rollout sampling weights by action category.
-    _ROLLOUT_WEIGHTS = {
-        "BASIC_ATTACK": 3.0,
-        "SPECIAL_SKILL": 3.0,
-        "DEFENSIVE_SHIELD": 1.5,
-    }
-    _MOVE_WEIGHT = 1.0
-
     def __init__(
         self,
         agent_name: str,
-        iterations: int = 1000,
-        exploration_c: float = 1.414,
+        iterations: int = 1200,
+        c_puct: float = 2.0,
         max_rollout_depth: int = 30,
+        epsilon: float = 0.2,
+        widen_exp: float = 0.6,
+        loop_penalty: float = 0.3,
     ) -> None:
-        """Initialise the MCTS agent.
-
-        Args:
-            agent_name:        ``"agent1"`` or ``"agent2"``.
-            iterations:        Search iterations per move decision.
-            exploration_c:     UCB1 constant ``C``  (default √2).
-            max_rollout_depth: Maximum depth for random playouts.
-        """
         self.agent_name: str = agent_name
         self.iterations: int = iterations
-        self.exploration_c: float = exploration_c
+        self.c_puct: float = c_puct
         self.max_rollout_depth: int = max_rollout_depth
-        self.stats: Dict[str, float] = {
-            "nodes_expanded": 0,
-            "total_simulations": 0,
-            "avg_simulation_depth": 0.0,
-            "time_ms": 0.0,
-        }
+        self.epsilon: float = epsilon
+        self.widen_exp: float = widen_exp
+        self.loop_penalty: float = loop_penalty
+        self.stats: Dict[str, float] = {}
 
     # -- public interface ---------------------------------------------------
 
     def choose_action(self, state: GameState) -> Action:
-        """Build an MCTS tree and return the most-visited root child's action.
-
-        Args:
-            state: The current game state.
-
-        Returns:
-            The ``Action`` of the root child with the highest visit count.
-        """
+        """Build an MCTS tree and return the most-visited root child's action."""
         start: float = time.perf_counter()
         self.stats = {
             "nodes_expanded": 0,
@@ -173,22 +168,31 @@ class MCTSAgent:
         total_depth: int = 0
 
         for _ in range(self.iterations):
-            # 1. SELECT
-            node: MCTSNode = self._select(root)
+            # 1. SELECT + EXPAND — collect path for backprop
+            path: List[MCTSNode] = []
+            node = self._select(root, path)
 
-            # 2. EXPAND (if node has untried actions and is non-terminal)
+            # 2. EXPAND (progressive widening gate)
             if node.untried_actions and not node.state.is_terminal():
-                node = self._expand(node)
+                allowed = max(2, int(math.pow(max(node.visits, 1), self.widen_exp)))
+                if len(node.children) < allowed:
+                    node = self._expand(node)
+                    path.append(node)
 
-            # 3. SIMULATE
-            result, depth = self._simulate(node.state)
+            # 3. SIMULATE (heavy rollout)
+            result, depth = self._simulate(node)
             total_depth += depth
             self.stats["total_simulations"] += 1
 
-            # 4. BACKPROPAGATE
-            self._backpropagate(node, result)
+            # 4. BACKPROPAGATE (negamax via path)
+            self._backpropagate(path, result)
 
         # Pick child with most visits (most robust choice)
+        if not root.children:
+            # Fallback: if no children were expanded, return first valid action
+            actions = get_valid_actions(state)
+            return actions[0] if actions else Action.MOVE_DOWN
+
         best_child: MCTSNode = max(root.children, key=lambda c: c.visits)
         assert best_child.action_taken is not None
 
@@ -203,32 +207,26 @@ class MCTSAgent:
 
     # -- MCTS phases --------------------------------------------------------
 
-    def _select(self, node: MCTSNode) -> MCTSNode:
-        """Traverse the tree using UCB1 until a node with untried actions.
+    def _select(self, node: MCTSNode, path: List[MCTSNode]) -> MCTSNode:
+        """Traverse the tree using PUCT, appending each visited node to *path*.
 
-        If a fully expanded node has no children (terminal state), it is
-        returned directly.
-
-        Args:
-            node: Current tree node.
-
-        Returns:
-            A node eligible for expansion (has untried actions) or a
-            terminal node.
+        Stops at a node that has untried actions (subject to progressive
+        widening) or is terminal.
         """
-        while not node.untried_actions and node.children:
-            node = self._ucb1_child(node)
+        path.append(node)
+        while not node.state.is_terminal():
+            # Check progressive-widening limit
+            allowed = max(2, int(math.pow(max(node.visits, 1), self.widen_exp)))
+            if node.untried_actions and len(node.children) < allowed:
+                break  # need to expand
+            if not node.children:
+                break  # terminal-like (no actions at all)
+            node = self._puct_child(node)
+            path.append(node)
         return node
 
     def _expand(self, node: MCTSNode) -> MCTSNode:
-        """Expand one untried action from *node*.
-
-        Args:
-            node: A non-terminal node with at least one untried action.
-
-        Returns:
-            The newly created child node.
-        """
+        """Expand one untried action from *node*."""
         action: Action = node.untried_actions.pop()
         child_state: GameState = apply_action(node.state, action)
         child = MCTSNode(state=child_state, parent=node, action_taken=action)
@@ -236,103 +234,123 @@ class MCTSAgent:
         self.stats["nodes_expanded"] += 1
         return child
 
-    def _simulate(self, state: GameState) -> tuple[float, int]:
-        """Random rollout from *state* with heuristic-weighted action selection.
+    def _simulate(self, node: MCTSNode) -> Tuple[float, int]:
+        """Heavy rollout from *node* using epsilon-greedy action selection.
 
-        Returns:
-            A ``(result, depth)`` tuple where *result* is +1 (win for
-            ``self.agent_name``), −1 (loss), or 0 (draw / max depth),
-            and *depth* is the number of steps taken.
+        Returns ``(result, depth)`` where *result* is in [-1, +1] and
+        *depth* is the number of steps taken.
         """
-        sim_state: GameState = state.clone()
+        sim_state: GameState = node.state.clone()
         depth: int = 0
+        # Loop detection: position_history tracks (agent_pos, current_agent)
+        position_history: Counter = Counter()
+        penalty: float = 0.0
 
         while not sim_state.is_terminal() and depth < self.max_rollout_depth:
-            action: Action = self._weighted_action(sim_state)
+            # Record position for loop detection
+            pos_key = (
+                sim_state.agent1.position,
+                sim_state.agent2.position,
+                sim_state.current_agent,
+            )
+            position_history[pos_key] += 1
+            if position_history[pos_key] > 1:
+                penalty += self.loop_penalty
+
+            # Epsilon-greedy action selection
+            action = self._heavy_action(sim_state)
             sim_state = apply_action(sim_state, action)
             depth += 1
 
         # Score the terminal / leaf state
+        result: float
         if sim_state.is_terminal():
             winner = sim_state.get_winner()
             if winner == self.agent_name:
-                return 1.0, depth
+                result = 1.0
             elif winner is not None:
-                return -1.0, depth
-        return 0.0, depth
+                result = -1.0
+            else:
+                result = 0.0
+        else:
+            # Non-terminal: use heuristic, scaled to [-1, +1]
+            h = evaluate(sim_state, self.agent_name)
+            result = max(-1.0, min(1.0, h / 200.0))
 
-    def _backpropagate(self, node: MCTSNode, result: float) -> None:
-        """Propagate playout result up to the root, alternating sign each level.
+        # Apply loop penalty (reduce magnitude toward 0)
+        if penalty > 0.0:
+            result *= max(0.0, 1.0 - penalty)
 
-        Uses the standard MCTS negation pattern: the result is negated
-        at every tree level so that each node accumulates wins from its
-        own mover's perspective.
+        return result, depth
 
-        Args:
-            node:   The leaf from which the rollout was performed.
-            result: +1 for a ``self.agent_name`` win, −1 for a loss, 0 draw.
+    def _backpropagate(self, path: List[MCTSNode], result: float) -> None:
+        """Negamax backpropagation along the collected *path*.
+
+        The result is from the MCTS agent's perspective.  At each node
+        in the path the sign is set according to whether the node's
+        mover matches ``self.agent_name``.
         """
-        current: Optional[MCTSNode] = node
-        while current is not None:
-            current.visits += 1
-            current.wins += result
-            result = -result
-            current = current.parent
+        for node in reversed(path):
+            node.visits += 1
+            # If the node's current_agent is the MCTS agent, the result
+            # is positive when the MCTS agent wins.  Otherwise negate.
+            if node.state.current_agent == self.agent_name:
+                node.value += result
+            else:
+                node.value -= result
 
     # -- helpers ------------------------------------------------------------
 
-    def _ucb1_child(self, node: MCTSNode) -> MCTSNode:
-        """Select the child of *node* with the highest UCB1 score.
+    def _puct_child(self, node: MCTSNode) -> MCTSNode:
+        """Select the child of *node* with the highest PUCT score.
 
-        Children with zero visits are treated as having infinite UCB1
-        (explored first).
+        PUCT formula::
 
-        Args:
-            node: A fully expanded parent node.
+            Q_child + c_puct × √(N_parent) / (1 + N_child)
 
-        Returns:
-            The child with the highest UCB1 score.
+        Children with zero visits get an infinite exploration bonus.
         """
-        log_parent: float = math.log(node.visits) if node.visits > 0 else 0.0
+        sqrt_parent: float = math.sqrt(node.visits) if node.visits > 0 else 1.0
         best_score: float = float("-inf")
         best_child: MCTSNode = node.children[0]
 
         for child in node.children:
             if child.visits == 0:
                 return child  # unvisited → explore immediately
-            exploitation: float = child.wins / child.visits
-            exploration: float = self.exploration_c * math.sqrt(log_parent / child.visits)
-            score: float = exploitation + exploration
+            exploit: float = child.q
+            explore: float = self.c_puct * sqrt_parent / (1.0 + child.visits)
+            score: float = exploit + explore
             if score > best_score:
                 best_score = score
                 best_child = child
 
         return best_child
 
-    def _weighted_action(self, state: GameState) -> Action:
-        """Select a rollout action using combat-weighted random sampling.
+    def _heavy_action(self, state: GameState) -> Action:
+        """Epsilon-greedy action selection for heavy rollouts.
 
-        Combat actions (attack, skill) receive higher weight so that
-        rollouts are biased toward aggressive, decisive play.  This
-        avoids the expensive per-action heuristic evaluation of the
-        previous softmax approach while still producing high-quality
-        rollouts.
-
-        Args:
-            state: The current rollout state.
-
-        Returns:
-            A single ``Action`` to apply.
+        With probability ``epsilon`` a uniformly random action is chosen.
+        Otherwise the action yielding the best heuristic score (from the
+        current mover's perspective) is selected.
         """
         actions: List[Action] = get_valid_actions(state)
         if len(actions) <= 1:
             return actions[0] if actions else Action.MOVE_DOWN
 
-        weights: List[float] = [
-            self._ROLLOUT_WEIGHTS.get(a.value, self._MOVE_WEIGHT)
-            for a in actions
-        ]
-        return random.choices(actions, weights=weights, k=1)[0]
+        if random.random() < self.epsilon:
+            return random.choice(actions)
+
+        # Greedy: pick action with best immediate heuristic
+        current_agent = state.current_agent
+        best_action: Action = actions[0]
+        best_val: float = float("-inf")
+        for a in actions:
+            successor = apply_action(state, a)
+            val = evaluate(successor, current_agent)
+            if val > best_val:
+                best_val = val
+                best_action = a
+        return best_action
 
 
 # ---------------------------------------------------------------------------

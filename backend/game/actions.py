@@ -186,7 +186,7 @@ def apply_action(state: GameState, action: Action) -> GameState:
 
     # ---- 2. Resolve action ----
     if action in _MOVE_DELTAS:
-        _apply_move(actor, action, arena)
+        _apply_move(actor, action, arena, new_state)
     elif action == Action.BASIC_ATTACK:
         _apply_basic_attack(actor, opponent, arena)
     elif action == Action.DEFENSIVE_SHIELD:
@@ -212,11 +212,12 @@ def apply_action(state: GameState, action: Action) -> GameState:
 # Action implementations (operate on the *cloned* state)
 # ---------------------------------------------------------------------------
 
-def _apply_move(actor: Agent, action: Action, arena: Arena) -> None:
+def _apply_move(actor: Agent, action: Action, arena: Arena, state: GameState) -> None:
     """Move the agent one step in the given direction.
 
     After moving:
       - If the new tile is a TRAP, deal 10 damage and trigger the trap.
+      - If the new tile is a HEAL, restore up to 30 HP (one-time).
       - Tick arena trap respawn counters.
       - (ENERGY bonus is handled later in ``agent.tick``.)
 
@@ -224,6 +225,7 @@ def _apply_move(actor: Agent, action: Action, arena: Arena) -> None:
         actor:  The agent that is moving.
         action: One of the four MOVE_* actions.
         arena:  The game arena.
+        state:  The game state (for setting last_event).
     """
     dr, dc = _MOVE_DELTAS[action]
     new_r: int = actor.position[0] + dr
@@ -242,6 +244,19 @@ def _apply_move(actor: Agent, action: Action, arena: Arena) -> None:
     # Energy tile: grant bonus once then consume
     if tile == TileType.ENERGY:
         arena.consume_tile(new_r, new_c)  # permanent one-time effect
+
+    # Heal tile: restore HP once then consume
+    if tile == TileType.HEAL:
+        heal_amount = min(30, 100 - actor.hp)
+        if heal_amount > 0:
+            actor.hp = min(100, actor.hp + heal_amount)
+        arena.consume_tile(new_r, new_c)  # permanent one-time effect
+        state.last_event = {
+            "type": "heal",
+            "agent": actor.name,
+            "amount": heal_amount,
+            "position": [new_r, new_c],
+        }
 
     # Advance trap respawn timers globally
     arena.tick_traps()

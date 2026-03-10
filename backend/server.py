@@ -224,6 +224,7 @@ def serialize_state(
         "elevated_tiles": _elevated_tiles(arena),
         "consumed_tiles": [[r, c] for r, c in sorted(arena.consumed_tiles)],
         "agent_stats": _agent_stats(session),
+        "last_event": state.last_event,
     }
 
 
@@ -247,7 +248,7 @@ def new_game(req: NewGameRequest) -> Dict[str, Any]:
 
     agents: Dict[str, Union[MinimaxAgent, MCTSAgent, None]] = {
         "agent1": MinimaxAgent("agent1", depth=4),
-        "agent2": MCTSAgent("agent2", iterations=1000),
+        "agent2": MCTSAgent("agent2", iterations=1200),
     }
 
     human_side: Optional[str] = None

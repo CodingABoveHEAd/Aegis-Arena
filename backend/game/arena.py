@@ -24,6 +24,7 @@ class TileType(enum.Enum):
     ENERGY = "ENERGY"      # Restores 20 energy per turn tick
     TRAP = "TRAP"          # Deals 10 damage on first step; respawns after 3 turns
     ELEVATED = "ELEVATED"  # +20 % damage multiplier when attacking from here
+    HEAL = "HEAL"          # Restores up to 30 HP on first step (one-time)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +137,36 @@ class Arena:
                     self.tile_durability[(r, c)] = self.COVER_MAX_DURABILITY
                     self.tile_durability[(mr, mc)] = self.COVER_MAX_DURABILITY
                 placed += 1
+
+        # Place HEAL tiles: 2 pairs, min distance 3 from spawn corners,
+        # and not adjacent to any TRAP tile.
+        heal_placed = 0
+        while heal_placed < 2 and idx < len(candidates):
+            r, c = candidates[idx]
+            idx += 1
+            mr, mc = s - r, s - c
+
+            # Min distance 3 from spawn corners (0,0) and (s,s)
+            if abs(r) + abs(c) < 3 or abs(r - s) + abs(c - s) < 3:
+                continue
+
+            # Not adjacent to a TRAP tile
+            adjacent_to_trap = False
+            for nr, nc in self.get_neighbors(r, c):
+                if self.grid[nr][nc] == TileType.TRAP:
+                    adjacent_to_trap = True
+                    break
+            if not adjacent_to_trap:
+                for nr, nc in self.get_neighbors(mr, mc):
+                    if self.grid[nr][nc] == TileType.TRAP:
+                        adjacent_to_trap = True
+                        break
+            if adjacent_to_trap:
+                continue
+
+            self.grid[r][c] = TileType.HEAL
+            self.grid[mr][mc] = TileType.HEAL
+            heal_placed += 1
 
     # -- queries ------------------------------------------------------------
 

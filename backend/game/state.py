@@ -56,6 +56,7 @@ class GameState:
         self.arena: Arena = arena
         self.current_agent: str = current_agent
         self.turn_count: int = turn_count
+        self.last_event: Optional[Dict[str, Any]] = None
 
     # -- hashable representation -------------------------------------------
 
@@ -156,6 +157,7 @@ class GameState:
         cloned.arena.consumed_tiles = cloned_arena_consumed
         cloned.arena.trap_timers = dict(self.arena.trap_timers)
         cloned.arena.tile_durability = dict(self.arena.tile_durability)
+        cloned.last_event = None  # events are transient, not carried into search
         return cloned
 
     # -- serialization ------------------------------------------------------

@@ -2,36 +2,41 @@
 
 Scores a ``GameState`` from the perspective of a named agent using a
 weighted sum of tactical components.  The evaluation is used by
-Minimax (and as a soft guide in MCTS weighted rollouts).
+Minimax (and as a soft guide in MCTS heavy rollouts).
 
 Design philosophy
 -----------------
-Each component captures a distinct tactical concern:
+Each component captures a distinct tactical concern, rescaled so the
+total range sits roughly in **[-200, +200]**:
 
-* **HP advantage** (×2.0) — the most decisive factor; more HP means
-  more room for trades and survival.
-* **Energy advantage** (×0.5) — energy enables abilities but is less
+* **HP advantage** (×1.8) — the most decisive factor; 200 HP swing
+  maps to ~360 which dominates other terms at extremes.
+* **Energy advantage** (×0.4) — energy enables abilities but is less
   immediately impactful than raw HP.
 * **Position value** — tile-dependent bonus/penalty so the agent learns
-  to seek cover/energy and avoid traps.
+  to seek cover/energy/heal and avoid traps.
 * **Distance control** — rewards aggressive positioning when leading in
   HP, and defensive spacing when trailing.
-* **Elevation control** (×12 / −8) — being on high ground is a strong
+* **Elevation control** (×14 / −10) — being on high ground is a strong
   offensive advantage; the opponent being there is a threat.
-* **Burn threat** (−6) — a burning agent is losing HP every tick;
-  penalize this to encourage evasion and shield usage.
-* **Skill readiness** (+8) — having the special skill available is a
+* **Burn penalty** (−8 × remaining ticks) — a burning agent is losing
+  HP every tick; scales with remaining burn duration.
+* **Threat awareness** — penalises the opponent having skill/shield
+  ready while we do not.
+* **Tile proximity** — rewards being near beneficial tiles (HEAL,
+  ENERGY, COVER) and penalises being near traps.
+* **Skill readiness** (+10) — having the special skill available is a
   potent threat multiplier.
-* **Shield readiness** (+3) — having the shield available adds
+* **Shield readiness** (+4) — having the shield available adds
   defensive flexibility.
 
 Weights were chosen to reflect game-theoretic precedence:
-  HP > Position > Elevation > Skill > Energy > Shield > Distance.
+  HP > Elevation > Skill > Position > Energy > Shield > Distance > Tile-prox.
 """
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import List, Tuple
 
 try:
     from backend.game.arena import Arena, TileType
@@ -46,12 +51,35 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _manhattan(a: Tuple[int, int], b: Tuple[int, int]) -> int:
     """Manhattan distance between two grid positions."""
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def _nearest_tile_distance(
+    arena: Arena,
+    pos: Tuple[int, int],
+    tile_types: List[TileType],
+) -> int:
+    """Return the Manhattan distance to the nearest tile of any listed type.
+
+    Consumed tiles are excluded (they appear as EMPTY via ``get_tile``).
+    If no matching tile exists, returns ``arena.size * 2`` (a large
+    upper-bound sentinel value).
+    """
+    best = arena.size * 2
+    for r in range(arena.size):
+        for c in range(arena.size):
+            if arena.get_tile(r, c) in tile_types:
+                d = _manhattan(pos, (r, c))
+                if d < best:
+                    best = d
+                    if d <= 1:
+                        return d  # can't get closer than adjacent
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -62,25 +90,14 @@ def evaluate(state: GameState, agent_name: str) -> float:
     """Evaluate *state* from the perspective of *agent_name*.
 
     Positive scores favour *agent_name*; negative scores favour the
-    opponent.
-
-    Components (with default weights):
-
-    1. **hp_advantage**      ``(my_hp − opp_hp) × 2.0``
-    2. **energy_advantage**  ``(my_energy − opp_energy) × 0.5``
-    3. **position_value**    +10 COVER, +6 ENERGY, −15 TRAP, +12 ELEVATED
-    4. **distance_control**  ±5 / ±3 depending on HP lead and spacing
-    5. **elevation_control** +12 on ELEVATED; −8 if opponent on ELEVATED
-    6. **burn_threat**       −6 per active burn status
-    7. **skill_readiness**   +8 if special skill is available
-    8. **shield_readiness**  +3 if defensive shield is available
+    opponent.  Output range is approximately **[-200, +200]**.
 
     Args:
         state:      The game state to evaluate.
         agent_name: ``"agent1"`` or ``"agent2"`` — the perspective.
 
     Returns:
-        A float score (not bounded).
+        A float score.
     """
     if agent_name == "agent1":
         me, opp = state.agent1, state.agent2
@@ -90,35 +107,42 @@ def evaluate(state: GameState, agent_name: str) -> float:
     arena: Arena = state.arena
     score: float = 0.0
 
-    # 1. HP advantage — most critical resource
-    score += (me.hp - opp.hp) * 2.0
+    # 1. HP advantage — most critical resource  (×1.8, range ±180)
+    score += (me.hp - opp.hp) * 1.8
 
-    # 2. Energy advantage — enables abilities
-    score += (me.energy - opp.energy) * 0.5
+    # 2. Energy advantage  (×0.4, range ±40)
+    score += (me.energy - opp.energy) * 0.4
 
     # 3. Position value — tile-dependent bonus / penalty
     my_tile: TileType = arena.get_tile(*me.position)
-    if my_tile == TileType.COVER:
-        score += 10.0
-    elif my_tile == TileType.ENERGY:
-        score += 6.0
-    elif my_tile == TileType.TRAP:
-        score -= 15.0
-    elif my_tile == TileType.ELEVATED:
-        score += 12.0   # counted here AND in elevation_control
+    _TILE_VALUE = {
+        TileType.COVER: 12.0,
+        TileType.ENERGY: 7.0,
+        TileType.TRAP: -18.0,
+        TileType.ELEVATED: 14.0,
+    }
+    # HEAL tile support (attribute may not exist in older builds)
+    if hasattr(TileType, "HEAL"):
+        _TILE_VALUE[TileType.HEAL] = 16.0
+    score += _TILE_VALUE.get(my_tile, 0.0)
 
     # 4. Distance control
     dist: int = _manhattan(me.position, opp.position)
-    if me.hp > opp.hp:
-        # We're winning — reward aggressive positioning (close range)
+    hp_diff = me.hp - opp.hp
+    if hp_diff > 15:
+        # Strong lead — rush in
+        score += max(8.0 - dist * 1.5, -4.0)
+    elif hp_diff > 0:
         score += 5.0 if dist <= 2 else -3.0
-    elif me.hp < opp.hp:
-        # We're losing — reward defensive positioning (far range)
+    elif hp_diff < -15:
+        # Far behind — stay away; seek resources
+        score += min(dist * 1.2 - 2.0, 6.0)
+    elif hp_diff < 0:
         score += 5.0 if dist >= 3 else -3.0
     else:
-        # Equal HP — reward closing to engagement range to force a fight
+        # Equal HP — reward engagement range
         if dist <= 2:
-            score += 4.0
+            score += 5.0
         elif dist <= 4:
             score += 1.0
         else:
@@ -127,23 +151,41 @@ def evaluate(state: GameState, agent_name: str) -> float:
     # 5. Elevation control — high ground is a strong advantage
     opp_tile: TileType = arena.get_tile(*opp.position)
     if my_tile == TileType.ELEVATED:
-        score += 12.0
+        score += 14.0
     if opp_tile == TileType.ELEVATED:
-        score -= 8.0
+        score -= 10.0
 
-    # 6. Burn threat — burning agent is losing HP passively
+    # 6. Burn penalty — scales with remaining ticks  (−8 per tick)
     if me.burn_turns > 0:
-        score -= 6.0
+        score -= 8.0 * me.burn_turns
     if opp.burn_turns > 0:
-        score += 6.0
+        score += 8.0 * opp.burn_turns
 
-    # 7. Skill readiness — having the nuke available is a threat
+    # 7. Skill readiness  (+10)
     if me.skill_cooldown == 0 and me.energy >= 40:
-        score += 8.0
+        score += 10.0
 
-    # 8. Shield readiness — defensive flexibility
+    # 8. Shield readiness  (+4)
     if me.shield_cooldown == 0 and me.energy >= 20:
-        score += 3.0
+        score += 4.0
+
+    # 9. Threat awareness — penalise opponent's readiness
+    if opp.skill_cooldown == 0 and opp.energy >= 40:
+        score -= 6.0
+    if opp.shield_cooldown == 0 and opp.energy >= 20:
+        score -= 2.0
+
+    # 10. Tile proximity — encourage moving toward good tiles
+    beneficial_types = [TileType.COVER, TileType.ENERGY, TileType.ELEVATED]
+    if hasattr(TileType, "HEAL") and me.hp < 70:
+        beneficial_types.append(TileType.HEAL)
+
+    near_good = _nearest_tile_distance(arena, me.position, beneficial_types)
+    score += max(0.0, 4.0 - near_good * 0.8)  # up to +4 when adjacent
+
+    near_trap = _nearest_tile_distance(arena, me.position, [TileType.TRAP])
+    if near_trap <= 1:
+        score -= 5.0  # penalise standing next to a trap
 
     return score
 
@@ -161,7 +203,7 @@ if __name__ == "__main__":
     from game.state import GameState
 
     arena = Arena()
-    a1 = Agent("agent1", hp=80, energy=60, position=(1, 2))  # on COVER
+    a1 = Agent("agent1", hp=80, energy=60, position=(1, 2))
     a2 = Agent("agent2", hp=100, energy=50, position=(7, 7))
 
     state = GameState(a1, a2, arena)
