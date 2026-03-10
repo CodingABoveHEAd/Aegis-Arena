@@ -115,6 +115,14 @@ def evaluate(state: GameState, agent_name: str) -> float:
     elif me.hp < opp.hp:
         # We're losing — reward defensive positioning (far range)
         score += 5.0 if dist >= 3 else -3.0
+    else:
+        # Equal HP — reward closing to engagement range to force a fight
+        if dist <= 2:
+            score += 4.0
+        elif dist <= 4:
+            score += 1.0
+        else:
+            score -= 2.0
 
     # 5. Elevation control — high ground is a strong advantage
     opp_tile: TileType = arena.get_tile(*opp.position)

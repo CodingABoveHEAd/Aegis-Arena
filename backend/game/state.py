@@ -32,6 +32,8 @@ class GameState:
         arena:         Shared arena reference.
     """
 
+    MAX_TURNS: int = 200
+
     def __init__(
         self,
         agent1: Agent,
@@ -91,12 +93,12 @@ class GameState:
     # -- terminal conditions ------------------------------------------------
 
     def is_terminal(self) -> bool:
-        """Check whether the game is over (at least one agent eliminated).
+        """Check whether the game is over (at least one agent eliminated or turn limit reached).
 
         Returns:
-            ``True`` if either agent's HP has reached zero.
+            ``True`` if either agent's HP has reached zero or max turns exceeded.
         """
-        return self.agent1.hp <= 0 or self.agent2.hp <= 0
+        return self.agent1.hp <= 0 or self.agent2.hp <= 0 or self.turn_count > self.MAX_TURNS
 
     def get_winner(self) -> Optional[str]:
         """Determine the winner, if any.
@@ -105,6 +107,7 @@ class GameState:
             ``"agent1"`` if agent 2 is eliminated, ``"agent2"`` if
             agent 1 is eliminated, or ``None`` if no winner yet (or
             simultaneous KO, which shouldn't happen in a turn-based game).
+            When turn limit is exceeded, the agent with higher HP wins.
         """
         if self.agent1.hp <= 0 and self.agent2.hp <= 0:
             return None  # draw / simultaneous KO edge-case
@@ -112,6 +115,12 @@ class GameState:
             return "agent1"
         if self.agent1.hp <= 0:
             return "agent2"
+        # Turn limit exceeded — higher HP wins
+        if self.turn_count > self.MAX_TURNS:
+            if self.agent1.hp > self.agent2.hp:
+                return "agent1"
+            elif self.agent2.hp > self.agent1.hp:
+                return "agent2"
         return None
 
     # -- cloning ------------------------------------------------------------

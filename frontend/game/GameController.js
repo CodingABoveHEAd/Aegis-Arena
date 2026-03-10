@@ -11,6 +11,46 @@ import { APIClient } from './APIClient.js';
 const MAX_HP = 100;
 const MAX_ENERGY = 100;
 
+// ─── Backend ↔ Frontend conversion helpers ────────────────────────
+
+/** Convert backend action string ("MOVE_UP", "BASIC_ATTACK", …) to frontend object. */
+function parseAction(actionStr) {
+  if (typeof actionStr === 'object') return actionStr;
+  const s = String(actionStr).toUpperCase();
+  if (s === 'MOVE_UP')          return { type: 'move', direction: 'up' };
+  if (s === 'MOVE_DOWN')        return { type: 'move', direction: 'down' };
+  if (s === 'MOVE_LEFT')        return { type: 'move', direction: 'left' };
+  if (s === 'MOVE_RIGHT')       return { type: 'move', direction: 'right' };
+  if (s === 'BASIC_ATTACK')     return { type: 'attack' };
+  if (s === 'DEFENSIVE_SHIELD') return { type: 'shield' };
+  if (s === 'SPECIAL_SKILL')    return { type: 'skill' };
+  return { type: actionStr };
+}
+
+/** Convert frontend action object to backend action string. */
+function serializeAction(actionObj) {
+  if (typeof actionObj === 'string') return actionObj;
+  if (actionObj.type === 'move')   return `MOVE_${actionObj.direction.toUpperCase()}`;
+  if (actionObj.type === 'attack') return 'BASIC_ATTACK';
+  if (actionObj.type === 'shield') return 'DEFENSIVE_SHIELD';
+  if (actionObj.type === 'skill')  return 'SPECIAL_SKILL';
+  return String(actionObj.type).toUpperCase();
+}
+
+/** "agent1" | "agent2" | 1 | 2 → 1 | 2 */
+function agentNum(tag) {
+  if (tag === 'agent1' || tag === 1) return 1;
+  if (tag === 'agent2' || tag === 2) return 2;
+  return null;
+}
+
+/** 1 | 2 | "agent1" | "agent2" → "agent1" | "agent2" */
+function agentTag(v) {
+  if (v === 1 || v === 'agent1') return 'agent1';
+  if (v === 2 || v === 'agent2') return 'agent2';
+  return null;
+}
+
 export class GameController {
   /**
    * @param {object} deps — injected subsystems.
@@ -73,11 +113,11 @@ export class GameController {
 
   async startGame(mode, humanSide) {
     this.mode = mode;
-    this.humanSide = humanSide;
+    this.humanSide = humanSide ? agentTag(humanSide) : null;
     this._prevState = null;
     this._turnQueue = [];
 
-    const data = await APIClient.newGame(mode, humanSide);
+    const data = await APIClient.newGame(mode, this.humanSide);
     this.gameId = data.game_id;
     const state = data.state;
 
@@ -112,7 +152,7 @@ export class GameController {
 
   _startAIvsAI() {
     this.ws = APIClient.connectWebSocket(this.gameId, (msg) => {
-      if (msg.type === 'turn') {
+      if (msg.type === 'move') {
         this._turnQueue.push(msg);
         this._processQueue();
       } else if (msg.type === 'game_over') {
@@ -128,7 +168,7 @@ export class GameController {
 
     const msg = this._turnQueue.shift();
 
-    if (msg.type === 'turn') {
+    if (msg.type === 'move') {
       await this._applyTurn(msg.action, msg.state, msg.agent);
     } else if (msg.type === 'game_over') {
       if (msg.state) this._applyHUD(msg.state);
@@ -157,7 +197,7 @@ export class GameController {
     if (isHumanTurn) {
       // Show action panel with valid actions
       const validData = await APIClient.getValidActions(this.gameId);
-      this.actionPanel.setValidActions(validData.actions);
+      this.actionPanel.setValidActions(validData.actions.map(a => parseAction(a)));
       this.actionPanel.show();
     } else {
       this.actionPanel.hide();
@@ -173,7 +213,8 @@ export class GameController {
    */
   async handleHumanAction(action) {
     this.actionPanel.hide();
-    const result = await APIClient.submitAction(this.gameId, action);
+    const actionStr = serializeAction(action);
+    const result = await APIClient.submitAction(this.gameId, actionStr);
     await this._applyTurn(action, result.state, this.humanSide);
     this._handleHumanVsAI(result.state);
   }
@@ -186,57 +227,61 @@ export class GameController {
     const prevState = this._prevState;
     this._prevState = state;
 
+    // Normalize action & agent id
+    const parsed   = parseAction(action);
+    const actorNum = agentNum(agentId);
+
     // Who acted?
-    const actor   = agentId === 1 ? this.agent1 : this.agent2;
-    const target  = agentId === 1 ? this.agent2 : this.agent1;
-    const agentState = agentId === 1 ? state.agent1 : state.agent2;
-    const targetState = agentId === 1 ? state.agent2 : state.agent1;
+    const actor   = actorNum === 1 ? this.agent1 : this.agent2;
+    const target  = actorNum === 1 ? this.agent2 : this.agent1;
+    const agentState = actorNum === 1 ? state.agent1 : state.agent2;
+    const targetState = actorNum === 1 ? state.agent2 : state.agent1;
 
     // Move agent mesh
     const newPos = this.arena.gridToWorld(agentState.position);
     actor.moveTo(newPos);
 
     // Face direction of action
-    if (action.type === 'attack' || action.type === 'skill') {
+    if (parsed.type === 'attack' || parsed.type === 'skill') {
       const targetPos = this.arena.gridToWorld(targetState.position);
       actor.lookAt(targetPos);
     }
 
     // Visual effects
-    if (action.type === 'attack') {
+    if (parsed.type === 'attack') {
       const from = actor.group.position.clone();
       from.y += 0.5;
       const to = target.group.position.clone();
       to.y += 0.5;
-      const color = agentId === 1 ? 0x00d4ff : 0xff3333;
+      const color = actorNum === 1 ? 0x00d4ff : 0xff3333;
       this.effects.projectile(from, to, color, () => {
         // Damage number
-        const dmg = this._calcDamage(prevState, state, agentId);
+        const dmg = this._calcDamage(prevState, state, actorNum);
         if (dmg > 0) {
           this.effects.damageNumber(to, `-${dmg}`, 'damage-label red');
           target.applyHitReaction(new THREE.Vector3().subVectors(to, from));
         }
       });
       this.cameraRig.triggerActionCam(to, 0.8);
-    } else if (action.type === 'skill') {
+    } else if (parsed.type === 'skill') {
       const center = actor.group.position.clone();
       center.y += 0.3;
-      const color = agentId === 1 ? 0x00d4ff : 0xff3333;
+      const color = actorNum === 1 ? 0x00d4ff : 0xff3333;
       this.effects.shockwave(center, color, this.cameraRig);
-      const dmg = this._calcDamage(prevState, state, agentId);
+      const dmg = this._calcDamage(prevState, state, actorNum);
       if (dmg > 0) {
         const tPos = target.group.position.clone();
         tPos.y += 0.5;
         this.effects.damageNumber(tPos, `-${dmg}`, 'damage-label red');
         target.applyHitReaction(new THREE.Vector3().subVectors(tPos, center));
       }
-    } else if (action.type === 'shield') {
+    } else if (parsed.type === 'shield') {
       actor.setShield(true);
       const center = actor.group.position.clone();
       center.y += 0.5;
-      const color = agentId === 1 ? 0x00d4ff : 0xff3333;
+      const color = actorNum === 1 ? 0x00d4ff : 0xff3333;
       this.effects.shieldPulse(center, color);
-    } else if (action.type === 'move') {
+    } else if (parsed.type === 'move') {
       // Slow visual if agent is slowed
       if (agentState.slow_active) {
         this.effects.slowVisual(newPos);
@@ -281,8 +326,8 @@ export class GameController {
     this._applyHUD(state);
 
     // Log
-    const actionText = this._actionText(action);
-    this.hud.addLog(state.turn_count, agentId, actionText);
+    const actionText = this._actionText(parsed);
+    this.hud.addLog(state.turn_count, actorNum, actionText);
 
     // AI stats
     if (state.agent_stats) {
@@ -365,10 +410,11 @@ export class GameController {
     const finalStats = document.getElementById('final-stats');
     const overlay = document.getElementById('game-over');
 
-    if (winner === 1) {
+    const w = agentNum(winner);
+    if (w === 1) {
       winnerText.textContent = 'AGENT α WINS';
       winnerText.style.color = 'var(--agent1)';
-    } else if (winner === 2) {
+    } else if (w === 2) {
       winnerText.textContent = 'AGENT β WINS';
       winnerText.style.color = 'var(--agent2)';
     } else {
