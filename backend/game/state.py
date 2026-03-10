@@ -80,6 +80,7 @@ class GameState:
             a2.burn_turns, a2.slow_active,
             self.current_agent,
             self.turn_count,
+            tuple(sorted(self.arena.consumed_tiles)),
         )
 
     def __hash__(self) -> int:
@@ -131,17 +132,31 @@ class GameState:
         Both agents are independently cloned; the arena is shared
         (its layout is static except for trap timers, which belong
         to the global board, not to a search branch).
+        consumed_tiles is shallow-copied so search branches stay
+        independent.
 
         Returns:
             A new ``GameState`` with cloned agents and the same arena.
         """
-        return GameState(
+        cloned = GameState(
             agent1=self.agent1.clone(),
             agent2=self.agent2.clone(),
             arena=self.arena,           # shared reference
             current_agent=self.current_agent,
             turn_count=self.turn_count,
         )
+        # Ensure search branches don't share the consumed set
+        cloned.arena = self.arena  # still shared grid
+        # We need a copy of the mutable consumed_tiles per branch
+        import copy as _copy
+        cloned_arena_consumed = self.arena.consumed_tiles.copy()
+        # Patch: create a lightweight arena wrapper won't work cleanly.
+        # Instead, clone the arena for search branches too.
+        cloned.arena = _copy.copy(self.arena)
+        cloned.arena.consumed_tiles = cloned_arena_consumed
+        cloned.arena.trap_timers = dict(self.arena.trap_timers)
+        cloned.arena.tile_durability = dict(self.arena.tile_durability)
+        return cloned
 
     # -- serialization ------------------------------------------------------
 

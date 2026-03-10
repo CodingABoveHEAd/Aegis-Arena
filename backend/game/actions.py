@@ -232,11 +232,16 @@ def _apply_move(actor: Agent, action: Action, arena: Arena) -> None:
 
     tile: TileType = arena.get_tile(new_r, new_c)
 
-    # Trap damage on entry
+    # Trap damage on entry (one-time: consume after triggering)
     if tile == TileType.TRAP:
         on_cover: bool = False  # just stepped onto a TRAP, not COVER
         actor.take_damage(10, on_cover=on_cover)
         arena.trigger_trap(new_r, new_c)  # mark trap for respawn countdown
+        arena.consume_tile(new_r, new_c)  # permanent one-time effect
+
+    # Energy tile: grant bonus once then consume
+    if tile == TileType.ENERGY:
+        arena.consume_tile(new_r, new_c)  # permanent one-time effect
 
     # Advance trap respawn timers globally
     arena.tick_traps()

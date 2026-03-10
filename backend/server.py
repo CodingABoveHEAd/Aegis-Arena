@@ -74,6 +74,24 @@ async def _on_startup() -> None:
     logger.info("Aegis Arena server ready.")
 
 
+@app.get("/")
+def root() -> Dict[str, Any]:
+    """Health-check / info endpoint."""
+    return {
+        "game": "Aegis Arena",
+        "version": "2.0.0",
+        "status": "running",
+        "endpoints": [
+            "POST /new_game",
+            "GET  /valid_actions/{game_id}",
+            "POST /action/{game_id}",
+            "GET  /ai_move/{game_id}",
+            "GET  /history/{game_id}",
+            "WS   /ws/{game_id}",
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # In-memory game store
 # ---------------------------------------------------------------------------
@@ -204,6 +222,7 @@ def serialize_state(
         "winner": state.get_winner(),
         "tile_durability": _tile_durability_map(arena),
         "elevated_tiles": _elevated_tiles(arena),
+        "consumed_tiles": [[r, c] for r, c in sorted(arena.consumed_tiles)],
         "agent_stats": _agent_stats(session),
     }
 
@@ -228,7 +247,7 @@ def new_game(req: NewGameRequest) -> Dict[str, Any]:
 
     agents: Dict[str, Union[MinimaxAgent, MCTSAgent, None]] = {
         "agent1": MinimaxAgent("agent1", depth=4),
-        "agent2": MCTSAgent("agent2", iterations=500),
+        "agent2": MCTSAgent("agent2", iterations=1000),
     }
 
     human_side: Optional[str] = None

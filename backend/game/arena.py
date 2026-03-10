@@ -8,6 +8,7 @@ and serialization.
 from __future__ import annotations
 
 import enum
+import random
 from typing import Dict, List, Tuple
 
 
@@ -63,71 +64,90 @@ class Arena:
         ]
         self.trap_timers: Dict[Tuple[int, int], int] = {}
         self.tile_durability: Dict[Tuple[int, int], int] = {}
-        self._place_tiles()
+        self.consumed_tiles: set = set()  # tiles that gave their one-time effect
+        self.generate_layout()
 
-    # -- fixed symmetric layout ---------------------------------------------
+    # -- random symmetric layout -------------------------------------------
 
-    def _place_tiles(self) -> None:
-        """Hard-code a symmetric tile layout (mirrored about the main diagonal).
+    def generate_layout(self) -> None:
+        """Generate a random symmetric tile layout.
 
-        Placement pairs ``(r, c)`` ↔ ``(size-1-r, size-1-c)`` guarantee
-        fair starting conditions for both agents.
+        Tiles are placed in mirrored pairs ``(r, c)`` ↔ ``(s-r, s-c)``
+        to guarantee fair starting conditions.  A safe zone around each
+        spawn corner is kept EMPTY.
+
+        Tile counts per match (pairs placed, each pair = 2 tiles):
+            COVER: 3 pairs (6 tiles), ENERGY: 2 pairs (4 tiles),
+            TRAP: 2 pairs (4 tiles), ELEVATED: 2 pairs (4 tiles).
         """
-        s = self.size - 1  # shorthand for mirror index
+        s = self.size - 1
 
-        # 6 COVER tiles (3 pairs)
-        cover_positions: List[Tuple[int, int]] = [
-            (1, 2), (3, 3), (2, 5),
+        # Reset grid
+        for r in range(self.size):
+            for c in range(self.size):
+                self.grid[r][c] = TileType.EMPTY
+
+        # Reset mutable state
+        self.trap_timers.clear()
+        self.tile_durability.clear()
+        self.consumed_tiles.clear()
+
+        # Safe zone: 2-Manhattan-distance from spawn corners (0,0) and (s,s)
+        safe = set()
+        for r in range(self.size):
+            for c in range(self.size):
+                if abs(r) + abs(c) <= 2:
+                    safe.add((r, c))
+                if abs(r - s) + abs(c - s) <= 2:
+                    safe.add((r, c))
+
+        # Candidate cells: upper-triangle (r*size+c < mirror), not in safe zone
+        candidates: List[Tuple[int, int]] = []
+        for r in range(self.size):
+            for c in range(self.size):
+                mr, mc = s - r, s - c
+                # Only consider one cell of each mirror pair (avoid double-place)
+                if (r * self.size + c) >= (mr * self.size + mc):
+                    continue
+                if (r, c) in safe or (mr, mc) in safe:
+                    continue
+                candidates.append((r, c))
+
+        random.shuffle(candidates)
+
+        # Tile quotas: (TileType, count_of_pairs)
+        quotas = [
+            (TileType.COVER, 3),
+            (TileType.ENERGY, 2),
+            (TileType.TRAP, 2),
+            (TileType.ELEVATED, 2),
         ]
-        # 4 ENERGY tiles (2 pairs)
-        energy_positions: List[Tuple[int, int]] = [
-            (0, 3), (2, 1),
-        ]
-        # 4 TRAP tiles (2 pairs)
-        trap_positions: List[Tuple[int, int]] = [
-            (1, 4), (3, 1),
-        ]
-        # 4 ELEVATED tiles (2 pairs)
-        elevated_positions: List[Tuple[int, int]] = [
-            (0, 6), (2, 3),
-        ]
 
-        for r, c in cover_positions:
-            self.grid[r][c] = TileType.COVER
-            self.grid[s - r][s - c] = TileType.COVER  # diagonal mirror
-            # Initialise cover durability
-            self.tile_durability[(r, c)] = self.COVER_MAX_DURABILITY
-            self.tile_durability[(s - r, s - c)] = self.COVER_MAX_DURABILITY
-
-        for r, c in energy_positions:
-            self.grid[r][c] = TileType.ENERGY
-            self.grid[s - r][s - c] = TileType.ENERGY
-
-        for r, c in trap_positions:
-            self.grid[r][c] = TileType.TRAP
-            self.grid[s - r][s - c] = TileType.TRAP
-
-        for r, c in elevated_positions:
-            self.grid[r][c] = TileType.ELEVATED
-            self.grid[s - r][s - c] = TileType.ELEVATED
+        idx = 0
+        for tile_type, count in quotas:
+            placed = 0
+            while placed < count and idx < len(candidates):
+                r, c = candidates[idx]
+                idx += 1
+                mr, mc = s - r, s - c
+                self.grid[r][c] = tile_type
+                self.grid[mr][mc] = tile_type
+                if tile_type == TileType.COVER:
+                    self.tile_durability[(r, c)] = self.COVER_MAX_DURABILITY
+                    self.tile_durability[(mr, mc)] = self.COVER_MAX_DURABILITY
+                placed += 1
 
     # -- queries ------------------------------------------------------------
 
     def get_tile(self, x: int, y: int) -> TileType:
         """Return the tile type at grid position ``(x, y)``.
 
-        Args:
-            x: Row index (0-based).
-            y: Column index (0-based).
-
-        Returns:
-            The ``TileType`` at the given cell.
-
-        Raises:
-            IndexError: If ``(x, y)`` is outside the grid.
+        Consumed tiles (one-time effect already used) appear as EMPTY.
         """
         if not self.is_valid(x, y):
             raise IndexError(f"Position ({x}, {y}) is out of bounds.")
+        if (x, y) in self.consumed_tiles:
+            return TileType.EMPTY
         return self.grid[x][y]
 
     def is_valid(self, x: int, y: int) -> bool:
@@ -231,14 +251,28 @@ class Arena:
 
     # -- serialization ------------------------------------------------------
 
+    def consume_tile(self, x: int, y: int) -> None:
+        """Mark a tile as consumed — its one-time effect has been used.
+
+        The tile will appear as EMPTY to get_tile and to_grid_list.
+        """
+        self.consumed_tiles.add((x, y))
+
     def to_grid_list(self) -> List[List[str]]:
         """Serialize the grid to a 2-D list of tile-name strings.
 
-        Returns:
-            ``size × size`` list of lists, each element being the
-            ``TileType.value`` string (e.g. ``"COVER"``).
+        Consumed tiles are reported as ``"EMPTY"``.
         """
-        return [[cell.value for cell in row] for row in self.grid]
+        result: List[List[str]] = []
+        for r, row in enumerate(self.grid):
+            result_row: List[str] = []
+            for c, cell in enumerate(row):
+                if (r, c) in self.consumed_tiles:
+                    result_row.append(TileType.EMPTY.value)
+                else:
+                    result_row.append(cell.value)
+            result.append(result_row)
+        return result
 
 
 # ---------------------------------------------------------------------------

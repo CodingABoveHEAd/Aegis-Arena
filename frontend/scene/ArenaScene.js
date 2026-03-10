@@ -306,4 +306,28 @@ export class ArenaScene {
     const yBase = mesh ? mesh.position.y : 0;
     return new THREE.Vector3(col, yBase + 0.08, row);
   }
+
+  /**
+   * Tear down existing arena meshes and rebuild from a new grid.
+   * Called each time a new game starts so the random layout is reflected.
+   * @param {string[][]} grid
+   * @param {number[][]} elevatedTiles
+   */
+  rebuild(grid, elevatedTiles = []) {
+    // Remove all children from the arena group
+    while (this.group.children.length) {
+      const child = this.group.children[0];
+      this.group.remove(child);
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material.dispose();
+      }
+    }
+    this.tileMeshes = [];
+    this.tileDecorations = [];
+    this.tilePhases = [];
+    this.energyCrystals = [];
+    this.build(grid, elevatedTiles);
+  }
 }

@@ -85,9 +85,13 @@ class MCTSNode:
     untried_actions: List[Action] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        """Populate untried actions from the game state."""
+        """Populate untried actions from the game state, sorted by priority."""
         if not self.untried_actions and not self.state.is_terminal():
-            self.untried_actions = get_valid_actions(self.state)
+            actions = get_valid_actions(self.state)
+            # Sort so highest-priority actions are at the END (popped first).
+            priority = MCTSAgent._ACTION_PRIORITY
+            actions.sort(key=lambda a: priority.get(a.value, 1))
+            self.untried_actions = actions
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +109,25 @@ class MCTSAgent:
         stats:             Per-call performance counters.
     """
 
+    # Priority weights for action ordering — combat actions explored first.
+    _ACTION_PRIORITY = {
+        "SPECIAL_SKILL": 4,
+        "BASIC_ATTACK": 3,
+        "DEFENSIVE_SHIELD": 2,
+    }
+
+    # Rollout sampling weights by action category.
+    _ROLLOUT_WEIGHTS = {
+        "BASIC_ATTACK": 3.0,
+        "SPECIAL_SKILL": 3.0,
+        "DEFENSIVE_SHIELD": 1.5,
+    }
+    _MOVE_WEIGHT = 1.0
+
     def __init__(
         self,
         agent_name: str,
-        iterations: int = 500,
+        iterations: int = 1000,
         exploration_c: float = 1.414,
         max_rollout_depth: int = 30,
     ) -> None:
@@ -243,11 +262,11 @@ class MCTSAgent:
         return 0.0, depth
 
     def _backpropagate(self, node: MCTSNode, result: float) -> None:
-        """Propagate playout result up to the root, flipping at agent boundaries.
+        """Propagate playout result up to the root, alternating sign each level.
 
-        At each node, ``visits`` is incremented and ``wins`` receives
-        ``+result`` or ``−result`` depending on whose perspective the
-        node represents.
+        Uses the standard MCTS negation pattern: the result is negated
+        at every tree level so that each node accumulates wins from its
+        own mover's perspective.
 
         Args:
             node:   The leaf from which the rollout was performed.
@@ -256,13 +275,8 @@ class MCTSAgent:
         current: Optional[MCTSNode] = node
         while current is not None:
             current.visits += 1
-            # If the node's state has our agent as the *next* mover,
-            # then the previous move was the opponent's — so the
-            # result sign flips.
-            if current.state.current_agent == self.agent_name:
-                current.wins += result
-            else:
-                current.wins -= result
+            current.wins += result
+            result = -result
             current = current.parent
 
     # -- helpers ------------------------------------------------------------
@@ -296,11 +310,13 @@ class MCTSAgent:
         return best_child
 
     def _weighted_action(self, state: GameState) -> Action:
-        """Select a rollout action using softmax over heuristic-scored successors.
+        """Select a rollout action using combat-weighted random sampling.
 
-        Evaluates the top-3 actions (by heuristic) and samples one
-        proportionally to their softmax weights.  Falls back to uniform
-        random if fewer than 2 actions are available.
+        Combat actions (attack, skill) receive higher weight so that
+        rollouts are biased toward aggressive, decisive play.  This
+        avoids the expensive per-action heuristic evaluation of the
+        previous softmax approach while still producing high-quality
+        rollouts.
 
         Args:
             state: The current rollout state.
@@ -312,32 +328,11 @@ class MCTSAgent:
         if len(actions) <= 1:
             return actions[0] if actions else Action.MOVE_DOWN
 
-        # Determine perspective for heuristic
-        perspective: str = state.current_agent
-
-        # Score a subset of actions (top-3) for efficiency in rollout
-        scored: List[tuple[float, Action]] = []
-        for act in actions[:min(len(actions), 5)]:
-            child = apply_action(state, act)
-            h = evaluate(child, perspective)
-            scored.append((h, act))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top3 = scored[:3]
-
-        # Softmax over scores (temperature τ = 1.0)
-        max_s: float = top3[0][0]
-        exps: List[float] = [math.exp(s - max_s) for s, _ in top3]  # numerically stable
-        total: float = sum(exps)
-        probs: List[float] = [e / total for e in exps]
-
-        # Weighted random choice
-        r: float = random.random()
-        cumulative: float = 0.0
-        for prob, (_, act) in zip(probs, top3):
-            cumulative += prob
-            if r <= cumulative:
-                return act
-        return top3[-1][1]
+        weights: List[float] = [
+            self._ROLLOUT_WEIGHTS.get(a.value, self._MOVE_WEIGHT)
+            for a in actions
+        ]
+        return random.choices(actions, weights=weights, k=1)[0]
 
 
 # ---------------------------------------------------------------------------

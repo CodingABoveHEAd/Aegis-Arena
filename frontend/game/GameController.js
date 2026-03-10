@@ -121,8 +121,8 @@ export class GameController {
     this.gameId = data.game_id;
     const state = data.state;
 
-    // Build arena
-    this.arena.build(state.grid, state.elevated_tiles);
+    // Build arena (rebuild each game for random layouts)
+    this.arena.rebuild(state.grid, state.elevated_tiles);
 
     // Position agents
     const pos1 = this.arena.gridToWorld(state.agent1.position);

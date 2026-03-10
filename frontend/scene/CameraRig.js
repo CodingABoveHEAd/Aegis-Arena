@@ -27,6 +27,12 @@ export class CameraRig {
 
     this.mode = 'overview'; // 'overview' | 'action'
 
+    // Track whether user has interacted with orbit controls
+    this._userHasInteracted = false;
+    const markInteracted = () => { this._userHasInteracted = true; };
+    domElement.addEventListener('pointerdown', markInteracted);
+    domElement.addEventListener('wheel', markInteracted);
+
     // Shake state
     this._shakeIntensity = 0;
     this._shakeDuration = 0;
@@ -107,8 +113,8 @@ export class CameraRig {
       }
     }
 
-    // Overview lerp
-    if (this.mode === 'overview') {
+    // Overview — only auto-position if user hasn't orbited yet
+    if (this.mode === 'overview' && !this._userHasInteracted) {
       this.camera.position.lerp(OVERVIEW.pos, 1.5 * dt);
       this.controls.target.lerp(OVERVIEW.target, 1.5 * dt);
     }
