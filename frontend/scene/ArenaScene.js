@@ -314,11 +314,15 @@ export class ArenaScene {
    * @param {number[][]} elevatedTiles
    */
   rebuild(grid, elevatedTiles = []) {
-    // Remove all children from the arena group
+    // Remove all children. Materials are disposed individually (unique per mesh).
+    // Geometry is intentionally NOT disposed here: the 64 tile meshes share a
+    // single BoxGeometry instance created in build(), so disposing per-child
+    // would invalidate the shared buffer on the first removal causing WebGL
+    // errors for every subsequent tile. Minor geometry memory overhead on
+    // "Play Again" is acceptable.
     while (this.group.children.length) {
       const child = this.group.children[0];
       this.group.remove(child);
-      if (child.geometry) child.geometry.dispose();
       if (child.material) {
         if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
         else child.material.dispose();

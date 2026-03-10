@@ -117,32 +117,50 @@ export class GameController {
     this._prevState = null;
     this._turnQueue = [];
 
-    const data = await APIClient.newGame(mode, this.humanSide);
-    this.gameId = data.game_id;
-    const state = data.state;
+    try {
+      const data = await APIClient.newGame(mode, this.humanSide);
+      this.gameId = data.game_id;
+      const state = data.state;
 
-    // Build arena (rebuild each game for random layouts)
-    this.arena.rebuild(state.grid, state.elevated_tiles);
+      // Build arena (rebuild each game for random layouts)
+      this.arena.rebuild(state.grid, state.elevated_tiles);
 
-    // Position agents
-    const pos1 = this.arena.gridToWorld(state.agent1.position);
-    const pos2 = this.arena.gridToWorld(state.agent2.position);
-    this.agent1.setPosition(pos1);
-    this.agent2.setPosition(pos2);
-    this.agent1.show();
-    this.agent2.show();
+      // Position agents
+      const pos1 = this.arena.gridToWorld(state.agent1.position);
+      const pos2 = this.arena.gridToWorld(state.agent2.position);
+      this.agent1.setPosition(pos1);
+      this.agent2.setPosition(pos2);
+      this.agent1.show();
+      this.agent2.show();
 
-    // HUD
-    this.hud.show();
-    this.hud.clearLog();
-    this._applyHUD(state);
+      // HUD
+      this.hud.show();
+      this.hud.clearLog();
+      this._applyHUD(state);
 
-    if (mode === 'ai_vs_ai') {
-      this.hud.showSpeedControls();
-      this._startAIvsAI();
-    } else {
-      this.hud.hideSpeedControls();
-      this._handleHumanVsAI(state);
+      if (mode === 'ai_vs_ai') {
+        this.hud.showSpeedControls();
+        this._startAIvsAI();
+      } else {
+        this.hud.hideSpeedControls();
+        this._handleHumanVsAI(state);
+      }
+    } catch (err) {
+      console.error('[GameController] startGame failed:', err);
+      // Restore menu so the user can try again
+      if (this._onReturnToMenu) this._onReturnToMenu();
+      // Show a brief error banner
+      const banner = document.createElement('div');
+      banner.style.cssText = [
+        'position:fixed', 'top:20px', 'left:50%', 'transform:translateX(-50%)',
+        'background:rgba(180,20,20,0.9)', 'color:#fff', 'padding:12px 24px',
+        'border-radius:6px', 'font-family:Rajdhani,sans-serif', 'font-size:1rem',
+        'font-weight:700', 'letter-spacing:.06em', 'z-index:200',
+        'pointer-events:none',
+      ].join(';');
+      banner.textContent = 'Could not start game — check the backend is running.';
+      document.body.appendChild(banner);
+      setTimeout(() => banner.remove(), 4000);
     }
   }
 
