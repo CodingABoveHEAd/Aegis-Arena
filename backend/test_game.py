@@ -12,16 +12,19 @@ from __future__ import annotations
 import sys
 import pathlib
 
-# Ensure imports work from project root
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[0]))
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+# Ensure imports work from project root — add ONLY the project root so that
+# all modules resolve through the ``backend.*`` package path, avoiding
+# duplicate-module issues caused by mixing ``game.*`` and ``backend.game.*``.
+_project_root = str(pathlib.Path(__file__).resolve().parents[1])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
-from game.arena import Arena, TileType
-from game.agent import Agent
-from game.state import GameState
-from game.actions import Action, apply_action, get_valid_actions
-from ai.heuristic import evaluate, _nearest_tile_distance
-from ai.mcts import MCTSAgent, MCTSNode
+from backend.game.arena import Arena, TileType
+from backend.game.agent import Agent
+from backend.game.state import GameState
+from backend.game.actions import Action, apply_action, get_valid_actions
+from backend.ai.heuristic import evaluate, _nearest_tile_distance
+from backend.ai.mcts import MCTSAgent, MCTSNode
 
 
 # -----------------------------------------------------------------------
@@ -148,23 +151,30 @@ def test_heal_tile_mechanics() -> None:
 
 def test_heuristic_heal_awareness() -> None:
     """Heuristic should value being near/on a HEAL tile when HP is low."""
+    # Use a clean arena with only HEAL to isolate tile-proximity effect
     arena = Arena()
-    # Place a HEAL tile at (4, 4)
+    # Clear all tiles to EMPTY, then place one HEAL
+    for r in range(arena.size):
+        for c in range(arena.size):
+            arena.grid[r][c] = TileType.EMPTY
     arena.grid[4][4] = TileType.HEAL
+    arena.consumed_tiles.clear()
+    arena.tile_durability.clear()
+    arena.trap_timers.clear()
 
-    # Low HP agent near HEAL
-    a1_near = Agent("agent1", hp=50, energy=50, position=(4, 3))
-    a2 = Agent("agent2", hp=100, energy=50, position=(7, 7))
-    state_near = GameState(a1_near, a2, arena)
+    # Equal HP, agent near HEAL vs far from HEAL
+    a1_near = Agent("agent1", hp=60, energy=50, position=(4, 3))
+    a2_near = Agent("agent2", hp=60, energy=50, position=(7, 7))
+    state_near = GameState(a1_near, a2_near, arena)
 
-    # Low HP agent far from HEAL
-    a1_far = Agent("agent1", hp=50, energy=50, position=(0, 0))
-    state_far = GameState(a1_far, a2, arena)
+    a1_far = Agent("agent1", hp=60, energy=50, position=(0, 0))
+    a2_far = Agent("agent2", hp=60, energy=50, position=(7, 7))
+    state_far = GameState(a1_far, a2_far, arena)
 
     score_near = evaluate(state_near, "agent1")
     score_far = evaluate(state_far, "agent1")
 
-    # Being near heal should be better (or at least not worse)
+    # Being near heal should be better (tile proximity bonus)
     assert score_near > score_far, (
         f"Near-heal score ({score_near:.1f}) should exceed far-heal score ({score_far:.1f})"
     )
@@ -191,12 +201,17 @@ def test_mcts_valid_action() -> None:
     a2 = Agent("agent2", position=(6, 6))
     state = GameState(a1, a2, arena)
 
+    # Capture valid actions BEFORE MCTS modifies shared arena grid
+    valid = get_valid_actions(state)
+
     agent = MCTSAgent("agent1", iterations=50)  # small for speed
     action = agent.choose_action(state)
 
     # Must be a valid Action
-    valid = get_valid_actions(state)
-    assert action in valid, f"MCTS returned invalid action {action.value}"
+    assert action in valid, (
+        f"MCTS returned invalid action {action.value}; "
+        f"valid={[a.value for a in valid]}"
+    )
 
     # Stats should be populated
     assert agent.stats["total_simulations"] > 0, "No simulations ran"
@@ -217,11 +232,13 @@ def test_mcts_progressive_widening() -> None:
     a2 = Agent("agent2", position=(5, 5))
     state = GameState(a1, a2, arena)
 
+    # Capture valid actions BEFORE MCTS modifies shared arena grid
+    valid = get_valid_actions(state)
+
     agent = MCTSAgent("agent1", iterations=100, widen_exp=0.6)
     action = agent.choose_action(state)
 
     # The action must be valid
-    valid = get_valid_actions(state)
     assert action in valid, f"MCTS returned invalid action: {action.value}"
 
     # Verify MCTSNode properties

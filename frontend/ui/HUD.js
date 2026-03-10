@@ -174,6 +174,22 @@ export class HUD {
     }
   }
 
+  /**
+   * Flash the HP bar green briefly for a heal event.
+   * @param {number} id — 1 or 2
+   */
+  flashHealHP(id) {
+    const hpFill = document.getElementById(`hp-fill-${id}`);
+    if (!hpFill) return;
+    const orig = hpFill.style.background;
+    hpFill.style.background = '#00ff66';
+    hpFill.style.boxShadow = '0 0 12px rgba(0,255,100,0.6)';
+    setTimeout(() => {
+      hpFill.style.background = orig;
+      hpFill.style.boxShadow = '';
+    }, 600);
+  }
+
   clearLog() {
     if (this._logBody) this._logBody.innerHTML = '';
   }

@@ -13,6 +13,7 @@ const TILE_MAT = {
   ENERGY: { color: 0x1a1200, roughness: 0.7, metalness: 0.3, emissive: 0xaa5500, emissiveIntensity: 0.3 },
   TRAP: { color: 0x200000, roughness: 0.7, metalness: 0.3, emissive: 0x660000, emissiveIntensity: 0.25 },
   ELEVATED: { color: 0x0a1520, roughness: 0.7, metalness: 0.5, emissive: 0x112244, emissiveIntensity: 0.1 },
+  HEAL: { color: 0x002200, roughness: 0.6, metalness: 0.3, emissive: 0x00aa00, emissiveIntensity: 0.25 },
 };
 
 export class ArenaScene {
@@ -29,6 +30,8 @@ export class ArenaScene {
     this.tilePhases = [];
     /** @type {THREE.Mesh[]} energy crystal meshes (for spin animation) */
     this.energyCrystals = [];
+    /** @type {THREE.Group[]} heal cross decorations (for float animation) */
+    this.healCrosses = [];
     /** @type {THREE.Group} root group for entire arena */
     this.group = new THREE.Group();
     scene.add(this.group);
@@ -83,6 +86,7 @@ export class ArenaScene {
         if (type === 'COVER') this._addCoverWall(decoGroup);
         if (type === 'ENERGY') this._addEnergyCrystal(decoGroup);
         if (type === 'TRAP') this._addTrapSpikes(decoGroup);
+        if (type === 'HEAL') this._addHealCross(decoGroup);
         if (isElevated && type !== 'COVER' && type !== 'ENERGY' && type !== 'TRAP') {
           this._addElevatedParticle(decoGroup);
         }
@@ -147,6 +151,24 @@ export class ArenaScene {
       spike.position.set(dx, 0.17, dz);
       parent.add(spike);
     }
+  }
+
+  _addHealCross(parent) {
+    const armMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff66, emissive: 0x00aa44, emissiveIntensity: 0.6,
+      metalness: 0.4, roughness: 0.3,
+    });
+    const cross = new THREE.Group();
+    // Vertical arm
+    const vArm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.22, 0.06), armMat);
+    cross.add(vArm);
+    // Horizontal arm
+    const hArm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.06), armMat);
+    cross.add(hArm);
+    cross.position.set(0, 0.35, 0);
+    cross.userData._healCross = true;
+    parent.add(cross);
+    this.healCrosses.push(cross);
   }
 
   _addElevatedParticle(parent) {
@@ -246,6 +268,8 @@ export class ArenaScene {
           mesh.material.emissiveIntensity = 0.3 + 0.3 * Math.sin(time * 2.0 + phase);
         } else if (type === 'TRAP') {
           mesh.material.emissiveIntensity = 0.2 + 0.2 * Math.sin(time * 3.0 + phase);
+        } else if (type === 'HEAL') {
+          mesh.material.emissiveIntensity = 0.25 + 0.2 * Math.sin(time * 1.8 + phase);
         }
 
         // Drift particles on elevated tiles
@@ -266,6 +290,12 @@ export class ArenaScene {
     for (const crystal of this.energyCrystals) {
       crystal.rotation.y = time * 1.2;
       crystal.rotation.x = Math.sin(time * 0.8) * 0.3;
+    }
+
+    // Float + rotate heal crosses
+    for (const cross of this.healCrosses) {
+      cross.position.y = 0.35 + 0.08 * Math.sin(time * 1.5);
+      cross.rotation.y = time * 0.8;
     }
   }
 
@@ -332,6 +362,7 @@ export class ArenaScene {
     this.tileDecorations = [];
     this.tilePhases = [];
     this.energyCrystals = [];
+    this.healCrosses = [];
     this.build(grid, elevatedTiles);
   }
 }

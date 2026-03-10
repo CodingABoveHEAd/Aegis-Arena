@@ -340,6 +340,17 @@ export class GameController {
     // Update grid (cover destroyed, traps triggered, etc.)
     this.arena.updateGrid(state.grid);
 
+    // Handle last_event (e.g. heal tile)
+    if (state.last_event && state.last_event.type === 'heal') {
+      const healAgent = agentNum(state.last_event.agent);
+      const healMesh = healAgent === 1 ? this.agent1 : this.agent2;
+      const healPos = healMesh.group.position.clone();
+      healPos.y += 0.3;
+      this.effects.playHealEffect(healPos, state.last_event.amount);
+      this.hud.flashHealHP(healAgent);
+      this.hud.addLog(state.turn_count, healAgent, `HEAL +${state.last_event.amount} HP`);
+    }
+
     // Update HUD
     this._applyHUD(state);
 

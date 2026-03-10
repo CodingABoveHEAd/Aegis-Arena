@@ -484,6 +484,104 @@ export class Effects {
     });
   }
 
+  // ─── Heal effect — rising green orbs + pulse ring ──────────────────
+
+  /**
+   * Play a heal VFX at the given world position.
+   * @param {THREE.Vector3} pos — world position of the healed agent
+   * @param {number} amount — HP restored (shown as a green number)
+   */
+  playHealEffect(pos, amount) {
+    // 1. Rising green orbs
+    const orbGeo = new THREE.SphereGeometry(0.035, 6, 4);
+    const orbs = [];
+    for (let i = 0; i < 10; i++) {
+      const oMat = new THREE.MeshBasicMaterial({
+        color: 0x00ff66, transparent: true, opacity: 0.8,
+      });
+      const orb = new THREE.Mesh(orbGeo, oMat);
+      const angle = (i / 10) * Math.PI * 2;
+      const radius = 0.2 + Math.random() * 0.2;
+      orb.position.set(
+        pos.x + Math.cos(angle) * radius,
+        pos.y + Math.random() * 0.2,
+        pos.z + Math.sin(angle) * radius,
+      );
+      orb.userData._angle = angle;
+      orb.userData._radius = radius;
+      orb.userData._speed = 0.8 + Math.random() * 0.6;
+      this.scene.add(orb);
+      orbs.push(orb);
+    }
+
+    // 2. Pulse ring
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x00ff66, transparent: true, opacity: 0.7,
+    });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.02, 8, 24), ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.copy(pos);
+    ring.position.y += 0.1;
+    this.scene.add(ring);
+
+    // 3. Flash shimmer
+    const shimmerMat = new THREE.MeshBasicMaterial({
+      color: 0x88ffaa, transparent: true, opacity: 0.4,
+    });
+    const shimmer = new THREE.Mesh(new THREE.SphereGeometry(0.25, 8, 6), shimmerMat);
+    shimmer.position.copy(pos);
+    shimmer.position.y += 0.5;
+    this.scene.add(shimmer);
+
+    // 4. Positive damage number
+    this.damageNumber(pos, `+${amount}`, 'damage-label heal');
+
+    let elapsed = 0;
+    const duration = 1.0;
+    const self = this;
+    this._active.push({
+      update(dt, time) {
+        elapsed += dt;
+        const t = elapsed / duration;
+
+        // Orbs rise and spiral inward
+        for (const orb of orbs) {
+          orb.position.y += orb.userData._speed * dt;
+          orb.userData._radius *= (1 - dt * 1.5);
+          orb.userData._angle += dt * 4;
+          const r = orb.userData._radius;
+          const a = orb.userData._angle;
+          orb.position.x = pos.x + Math.cos(a) * r;
+          orb.position.z = pos.z + Math.sin(a) * r;
+          orb.material.opacity = 0.8 * (1 - t);
+          orb.scale.setScalar(Math.max(0.1, 1 - t * 0.6));
+        }
+
+        // Ring expands + fades
+        const rs = 1 + t * 6;
+        ring.scale.set(rs, rs, 1);
+        ringMat.opacity = 0.7 * (1 - t);
+
+        // Shimmer pulse + fade
+        const pulse = 1 + 0.3 * Math.sin(t * Math.PI * 4) * (1 - t);
+        shimmer.scale.setScalar(pulse);
+        shimmerMat.opacity = 0.4 * (1 - t);
+
+        if (t >= 1) {
+          for (const orb of orbs) {
+            self.scene.remove(orb);
+            orb.geometry.dispose();
+            orb.material.dispose();
+          }
+          self.scene.remove(ring); ring.geometry.dispose(); ringMat.dispose();
+          self.scene.remove(shimmer); shimmer.geometry.dispose(); shimmerMat.dispose();
+          return true;
+        }
+        return false;
+      },
+    });
+  }
+
   // ─── Burn visual — orbiting flame particles ───────────────────────
 
   burnVisual(agentGroup, duration = 2.0) {
