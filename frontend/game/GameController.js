@@ -111,14 +111,14 @@ export class GameController {
   // Start game
   // ───────────────────────────────────────────────────────────────────
 
-  async startGame(mode, humanSide) {
+  async startGame(mode, humanSide, algorithms = {}) {
     this.mode = mode;
     this.humanSide = humanSide ? agentTag(humanSide) : null;
     this._prevState = null;
     this._turnQueue = [];
 
     try {
-      const data = await APIClient.newGame(mode, this.humanSide);
+      const data = await APIClient.newGame(mode, this.humanSide, algorithms);
       this.gameId = data.game_id;
       const state = data.state;
 
@@ -362,10 +362,12 @@ export class GameController {
     if (state.agent_stats) {
       if (state.agent_stats.agent1 && Object.keys(state.agent_stats.agent1).length) {
         const s = state.agent_stats.agent1;
+        if (s.algorithm) this.hud.setAlgorithm(1, s.algorithm);
         this.hud.setAIStats(1, this._formatStats(s));
       }
       if (state.agent_stats.agent2 && Object.keys(state.agent_stats.agent2).length) {
         const s = state.agent_stats.agent2;
+        if (s.algorithm) this.hud.setAlgorithm(2, s.algorithm);
         this.hud.setAIStats(2, this._formatStats(s));
       }
     }
@@ -424,7 +426,9 @@ export class GameController {
 
   _formatStats(s) {
     if (s.search_depth_reached !== undefined) {
-      return `Depth ${s.search_depth_reached} · ${s.nodes_evaluated} nodes · ${Math.round(s.time_ms)}ms`;
+      let txt = `Depth ${s.search_depth_reached} · ${s.nodes_evaluated} nodes · ${Math.round(s.time_ms)}ms`;
+      if (s.killer_hits !== undefined) txt += ` · ${s.killer_hits} kills`;
+      return txt;
     }
     if (s.iterations !== undefined) {
       return `${s.iterations} iter · ${s.simulations} sims · ${Math.round(s.time_ms)}ms`;

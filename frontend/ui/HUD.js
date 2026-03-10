@@ -20,13 +20,13 @@ export class HUD {
 
   _buildPanels() {
     this._panelA1.innerHTML = this._panelHTML(1, 'AGENT α', 'MINIMAX');
-    this._panelA2.innerHTML = this._panelHTML(2, 'AGENT β', 'MCTS');
+    this._panelA2.innerHTML = this._panelHTML(2, 'AGENT β', 'NEGAMAX');
   }
 
   _panelHTML(id, name, algo) {
     const tag = id === 1 ? 'cyan' : 'red';
     return `
-      <div class="agent-name">${name} <span class="algo-tag">${algo}</span></div>
+      <div class="agent-name">${name} <span class="algo-tag" id="algo-tag-${id}">${algo}</span></div>
       <div class="stat-row">
         <span>❤</span>
         <div class="bar hp-bar"><div class="fill" id="hp-fill-${id}" style="width:100%"></div></div>
@@ -141,6 +141,16 @@ export class HUD {
   setAIStats(id, text) {
     const el = document.getElementById(`ai-stats-${id}`);
     if (el) el.textContent = text;
+  }
+
+  /**
+   * Update the algorithm name tag dynamically.
+   * @param {number} id — 1 or 2
+   * @param {string} algoName — e.g. "negamax", "mcts", "minimax"
+   */
+  setAlgorithm(id, algoName) {
+    const el = document.getElementById(`algo-tag-${id}`);
+    if (el) el.textContent = algoName.toUpperCase();
   }
 
   /**

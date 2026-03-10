@@ -86,7 +86,7 @@ def _nearest_tile_distance(
 # Heuristic
 # ---------------------------------------------------------------------------
 
-def evaluate(state: GameState, agent_name: str) -> float:
+def evaluate(state: GameState, agent_name: str = None) -> float:
     """Evaluate *state* from the perspective of *agent_name*.
 
     Positive scores favour *agent_name*; negative scores favour the
@@ -95,10 +95,14 @@ def evaluate(state: GameState, agent_name: str) -> float:
     Args:
         state:      The game state to evaluate.
         agent_name: ``"agent1"`` or ``"agent2"`` — the perspective.
+                    Defaults to ``state.current_agent`` if ``None``.
 
     Returns:
         A float score.
     """
+    if agent_name is None:
+        agent_name = state.current_agent
+
     if agent_name == "agent1":
         me, opp = state.agent1, state.agent2
     else:

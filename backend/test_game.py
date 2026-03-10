@@ -25,6 +25,10 @@ from backend.game.state import GameState
 from backend.game.actions import Action, apply_action, get_valid_actions
 from backend.ai.heuristic import evaluate, _nearest_tile_distance
 from backend.ai.mcts import MCTSAgent, MCTSNode
+from backend.ai.negamax import NegamaxAgent
+from backend.ai.minimax import MinimaxAgent
+from backend.ai.cache import TranspositionTable, EXACT, LOWER, UPPER
+from backend.ai.agent_factory import create_agent, available_algorithms
 
 
 # -----------------------------------------------------------------------
@@ -250,6 +254,195 @@ def test_mcts_progressive_widening() -> None:
 
 
 # -----------------------------------------------------------------------
+# Test 6 — Negamax attacks when in range
+# -----------------------------------------------------------------------
+
+def test_negamax_attacks_when_in_range() -> None:
+    """When the opponent is within attack range and attack is beneficial,
+    Negamax should choose an attack action (BASIC_ATTACK or SPECIAL_SKILL)."""
+    arena = Arena()
+    # Place agents adjacent (distance 1 — within basic attack range of 2)
+    a1 = Agent("agent1", hp=80, energy=60, position=(3, 3))
+    a2 = Agent("agent2", hp=40, energy=10, position=(3, 4))
+    state = GameState(a1, a2, arena, current_agent="agent1")
+
+    agent = NegamaxAgent("agent1", time_budget_ms=500, max_depth=6)
+    action = agent.choose_action(state)
+
+    attack_actions = {Action.BASIC_ATTACK, Action.SPECIAL_SKILL}
+    assert action in attack_actions, (
+        f"Expected attack action when in range, got {action.value}"
+    )
+    print("  [PASS] test_negamax_attacks_when_in_range")
+
+
+# -----------------------------------------------------------------------
+# Test 7 — Negamax depth increases with time budget
+# -----------------------------------------------------------------------
+
+def test_negamax_depth_increases_with_time() -> None:
+    """A larger time budget should allow deeper search."""
+    arena = Arena()
+    a1 = Agent("agent1", position=(0, 0))
+    a2 = Agent("agent2", position=(7, 7))
+    state = GameState(a1, a2, arena)
+
+    short = NegamaxAgent("agent1", time_budget_ms=50, max_depth=10)
+    short.choose_action(state)
+    short_depth = short.stats["depth_reached"]
+
+    long = NegamaxAgent("agent1", time_budget_ms=800, max_depth=10)
+    long.choose_action(state)
+    long_depth = long.stats["depth_reached"]
+
+    assert long_depth >= short_depth, (
+        f"Longer budget depth ({long_depth}) should be >= short ({short_depth})"
+    )
+    assert long_depth >= 2, f"Expected at least depth 2 with 800ms, got {long_depth}"
+
+    print("  [PASS] test_negamax_depth_increases_with_time")
+
+
+# -----------------------------------------------------------------------
+# Test 8 — Negamax beats random agent
+# -----------------------------------------------------------------------
+
+def test_negamax_beats_random() -> None:
+    """Negamax must win at least 4 out of 5 games against a random agent."""
+    import random as rng
+
+    wins = 0
+    for i in range(5):
+        side = "agent1" if i % 2 == 0 else "agent2"
+        arena = Arena()
+        a1 = Agent("agent1", position=(0, 0))
+        a2 = Agent("agent2", position=(7, 7))
+        state = GameState(a1, a2, arena)
+        neg = NegamaxAgent(side, time_budget_ms=400, max_depth=8)
+
+        for _ in range(200):
+            if state.is_terminal():
+                break
+            actions = get_valid_actions(state)
+            if not actions:
+                break
+            if state.current_agent == side:
+                action = neg.choose_action(state)
+            else:
+                action = rng.choice(actions)
+            state = apply_action(state, action)
+
+        if state.get_winner() == side:
+            wins += 1
+
+    assert wins >= 4, f"Negamax only won {wins}/5 against random (need >=4)"
+    print(f"  [PASS] test_negamax_beats_random ({wins}/5 wins)")
+
+
+# -----------------------------------------------------------------------
+# Test 9 — Negamax vs Minimax is competitive
+# -----------------------------------------------------------------------
+
+def test_negamax_vs_minimax() -> None:
+    """Negamax should not lose catastrophically to Minimax.
+    Play 2 games (alternating sides), Negamax must win or draw at least once."""
+    results = []
+    for i in range(2):
+        neg_side = "agent1" if i == 0 else "agent2"
+        mini_side = "agent2" if i == 0 else "agent1"
+
+        arena = Arena()
+        a1 = Agent("agent1", position=(1, 1))
+        a2 = Agent("agent2", position=(6, 6))
+        state = GameState(a1, a2, arena)
+
+        neg = NegamaxAgent(neg_side, time_budget_ms=500, max_depth=8)
+        mini = MinimaxAgent(mini_side, depth=4, time_budget_ms=500)
+
+        for _ in range(200):
+            if state.is_terminal():
+                break
+            if state.current_agent == neg_side:
+                action = neg.choose_action(state)
+            else:
+                action = mini.choose_action(state)
+            state = apply_action(state, action)
+
+        winner = state.get_winner()
+        results.append(winner)
+
+    neg_non_losses = sum(
+        1 for i, w in enumerate(results)
+        if w == ("agent1" if i == 0 else "agent2") or w is None
+    )
+    assert neg_non_losses >= 1, (
+        f"Negamax lost both games to Minimax: {results}"
+    )
+    print(f"  [PASS] test_negamax_vs_minimax (results: {results})")
+
+
+# -----------------------------------------------------------------------
+# Test 10 — Algorithm registry
+# -----------------------------------------------------------------------
+
+def test_algorithm_registry() -> None:
+    """Agent factory should list all three algorithms and create each."""
+    algos = available_algorithms()
+    assert "minimax" in algos, "minimax not in registry"
+    assert "negamax" in algos, "negamax not in registry"
+    assert "mcts" in algos, "mcts not in registry"
+
+    for algo in algos:
+        agent = create_agent("agent1", algo)
+        assert hasattr(agent, "choose_action"), (
+            f"{algo} agent missing choose_action"
+        )
+
+    # Invalid algorithm should raise ValueError
+    try:
+        create_agent("agent1", "nonexistent")
+        assert False, "Expected ValueError for unknown algorithm"
+    except ValueError:
+        pass
+
+    print("  [PASS] test_algorithm_registry")
+
+
+# -----------------------------------------------------------------------
+# Test 11 — TT flag correctness
+# -----------------------------------------------------------------------
+
+def test_tt_flag_correctness() -> None:
+    """Transposition table stores and retrieves flags correctly."""
+    tt = TranspositionTable()
+    key1 = (1, 2, 3)
+    key2 = (4, 5, 6)
+    key3 = (7, 8, 9)
+
+    tt.store(key1, 3, 5.0, EXACT)
+    tt.store(key2, 3, 3.0, LOWER)
+    tt.store(key3, 3, -2.0, UPPER)
+
+    # Retrieve at sufficient depth
+    e1 = tt.get(key1, 3)
+    assert e1 is not None, "EXACT entry not found"
+    assert e1 == (5.0, 3, EXACT), f"EXACT entry wrong: {e1}"
+
+    e2 = tt.get(key2, 3)
+    assert e2 is not None, "LOWER entry not found"
+    assert e2[2] == LOWER, f"Expected LOWER flag, got {e2[2]}"
+
+    e3 = tt.get(key3, 2)  # lower depth request — should still return
+    assert e3 is not None, "UPPER entry not found at lower depth"
+    assert e3[2] == UPPER, f"Expected UPPER flag, got {e3[2]}"
+
+    # Request at higher depth should return None
+    assert tt.get(key1, 5) is None, "Should not return entry at shallower stored depth"
+
+    print("  [PASS] test_tt_flag_correctness")
+
+
+# -----------------------------------------------------------------------
 # Runner
 # -----------------------------------------------------------------------
 
@@ -267,6 +460,12 @@ if __name__ == "__main__":
         test_heuristic_heal_awareness,
         test_mcts_valid_action,
         test_mcts_progressive_widening,
+        test_negamax_attacks_when_in_range,
+        test_negamax_depth_increases_with_time,
+        test_negamax_beats_random,
+        test_negamax_vs_minimax,
+        test_algorithm_registry,
+        test_tt_flag_correctness,
     ]
 
     passed = 0

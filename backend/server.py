@@ -31,7 +31,9 @@ try:
     from backend.game.state import GameState
     from backend.game.actions import Action, apply_action, get_valid_actions
     from backend.ai.minimax import MinimaxAgent
+    from backend.ai.negamax import NegamaxAgent
     from backend.ai.mcts import MCTSAgent
+    from backend.ai.agent_factory import create_agent, available_algorithms, DEFAULT_ALGORITHMS
 except ImportError:
     try:
         from game.arena import Arena, TileType
@@ -39,14 +41,18 @@ except ImportError:
         from game.state import GameState
         from game.actions import Action, apply_action, get_valid_actions
         from ai.minimax import MinimaxAgent
+        from ai.negamax import NegamaxAgent
         from ai.mcts import MCTSAgent
+        from ai.agent_factory import create_agent, available_algorithms, DEFAULT_ALGORITHMS
     except ImportError:
         from arena import Arena, TileType  # type: ignore
         from agent import Agent  # type: ignore
         from state import GameState  # type: ignore
         from actions import Action, apply_action, get_valid_actions  # type: ignore
         from minimax import MinimaxAgent  # type: ignore
+        from negamax import NegamaxAgent  # type: ignore
         from mcts import MCTSAgent  # type: ignore
+        from agent_factory import create_agent, available_algorithms, DEFAULT_ALGORITHMS  # type: ignore
 
 logger = logging.getLogger("aegis_arena")
 
@@ -103,9 +109,10 @@ class GameSession:
     game_id: str
     state: GameState
     arena: Arena
-    agents: Dict[str, Union[MinimaxAgent, MCTSAgent, None]]
+    agents: Dict[str, Any]
     mode: str                          # "ai_vs_ai" | "human_vs_ai"
     human_side: Optional[str]          # "agent1" | "agent2" | None
+    agent_algorithms: Dict[str, str] = field(default_factory=dict)
     history: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -119,6 +126,8 @@ games: Dict[str, GameSession] = {}
 class NewGameRequest(BaseModel):
     mode: str = "human_vs_ai"          # "ai_vs_ai" | "human_vs_ai"
     human_side: Optional[str] = "agent1"
+    agent1_algorithm: Optional[str] = None  # default: from DEFAULT_ALGORITHMS
+    agent2_algorithm: Optional[str] = None  # default: from DEFAULT_ALGORITHMS
 
 
 class ActionRequest(BaseModel):
@@ -146,6 +155,7 @@ def _agent_stats(session: GameSession) -> Dict[str, Any]:
         elif isinstance(ai, MinimaxAgent):
             s = getattr(ai, "stats", {})
             out[name] = {
+                "algorithm": session.agent_algorithms.get(name, "minimax"),
                 "nodes_evaluated": int(s.get("nodes_evaluated", 0)),
                 "cache_hit_rate": (
                     ai.table.hit_rate() if ai.table is not None else 0.0
@@ -153,9 +163,22 @@ def _agent_stats(session: GameSession) -> Dict[str, Any]:
                 "time_ms": s.get("time_ms", 0.0),
                 "search_depth_reached": int(s.get("depth_reached", 0)),
             }
+        elif isinstance(ai, NegamaxAgent):
+            s = getattr(ai, "stats", {})
+            out[name] = {
+                "algorithm": session.agent_algorithms.get(name, "negamax"),
+                "nodes_evaluated": int(s.get("nodes_evaluated", 0)),
+                "cache_hit_rate": (
+                    ai.table.hit_rate() if ai.table is not None else 0.0
+                ),
+                "time_ms": s.get("time_ms", 0.0),
+                "search_depth_reached": int(s.get("depth_reached", 0)),
+                "killer_hits": int(s.get("killer_hits", 0)),
+            }
         elif isinstance(ai, MCTSAgent):
             s = getattr(ai, "stats", {})
             out[name] = {
+                "algorithm": session.agent_algorithms.get(name, "mcts"),
                 "iterations": ai.iterations,
                 "simulations": int(s.get("total_simulations", 0)),
                 "time_ms": s.get("time_ms", 0.0),
@@ -232,12 +255,21 @@ def serialize_state(
 # REST endpoints
 # ---------------------------------------------------------------------------
 
+@app.get("/available_algorithms")
+def get_available_algorithms() -> Dict[str, Any]:
+    """Return the list of registered algorithm names and defaults."""
+    return {
+        "algorithms": available_algorithms(),
+        "defaults": DEFAULT_ALGORITHMS,
+    }
+
+
 @app.post("/new_game")
 def new_game(req: NewGameRequest) -> Dict[str, Any]:
     """Create a new game session.
 
     * Agent1 starts at (1,1), Agent2 at (6,6), HP=100, Energy=50.
-    * Agent1 = MinimaxAgent(depth=4), Agent2 = MCTSAgent(iterations=500).
+    * Algorithms are configurable via request params (defaults: minimax/negamax).
     * In human_vs_ai mode the human's slot is set to None.
     """
     game_id = uuid.uuid4().hex
@@ -246,10 +278,15 @@ def new_game(req: NewGameRequest) -> Dict[str, Any]:
     a2 = Agent("agent2", position=(6, 6))
     state = GameState(a1, a2, arena)
 
-    agents: Dict[str, Union[MinimaxAgent, MCTSAgent, None]] = {
-        "agent1": MinimaxAgent("agent1", depth=4),
-        "agent2": MCTSAgent("agent2", iterations=1200),
+    algo1 = req.agent1_algorithm or DEFAULT_ALGORITHMS["agent1"]
+    algo2 = req.agent2_algorithm or DEFAULT_ALGORITHMS["agent2"]
+
+    agents: Dict[str, Any] = {
+        "agent1": create_agent("agent1", algo1),
+        "agent2": create_agent("agent2", algo2),
     }
+
+    agent_algorithms = {"agent1": algo1, "agent2": algo2}
 
     human_side: Optional[str] = None
     mode = req.mode
@@ -264,6 +301,7 @@ def new_game(req: NewGameRequest) -> Dict[str, Any]:
         agents=agents,
         mode=mode,
         human_side=human_side,
+        agent_algorithms=agent_algorithms,
     )
     games[game_id] = session
     return {"game_id": game_id, "state": serialize_state(state, arena, session)}
@@ -330,8 +368,8 @@ def ai_move(game_id: str) -> Dict[str, Any]:
     session.state = new_state
 
     stats = dict(getattr(ai_agent, "stats", {}))
-    # Include search_depth_reached for Minimax agents
-    if isinstance(ai_agent, MinimaxAgent):
+    # Normalise depth_reached key for frontend
+    if isinstance(ai_agent, (MinimaxAgent, NegamaxAgent)):
         stats["search_depth_reached"] = int(stats.pop("depth_reached", 0))
 
     session.history.append({
@@ -408,7 +446,7 @@ async def ws_game(websocket: WebSocket, game_id: str) -> None:
             session.state = new_state
 
             stats = dict(getattr(ai_agent, "stats", {}))
-            if isinstance(ai_agent, MinimaxAgent):
+            if isinstance(ai_agent, (MinimaxAgent, NegamaxAgent)):
                 stats["search_depth_reached"] = int(stats.pop("depth_reached", 0))
 
             session.history.append({

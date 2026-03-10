@@ -29,7 +29,7 @@ Time complexity note:
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 try:
     from backend.game.actions import Action, apply_action, get_valid_actions
@@ -121,6 +121,12 @@ class MinimaxAgent:
             "time_ms": 0.0,
             "depth_reached": 0,
         }
+        # Tracks board positions seen in the real game (not search) to
+        # penalise repetitions at leaf nodes and break oscillation loops.
+        self._game_history: Dict[tuple, int] = {}
+        # Tracks which actions have been taken from each board position so the
+        # cycle-escape can force diversity when the same position recurs.
+        self._used_actions_from: Dict[tuple, Set[Action]] = {}
 
     # -- public interface ---------------------------------------------------
 
@@ -138,6 +144,10 @@ class MinimaxAgent:
             The ``Action`` with the highest minimax value.
         """
         start: float = time.perf_counter()
+
+        # Record this real-game position before searching (for loop detection)
+        pk = self._position_key(state)
+        self._game_history[pk] = self._game_history.get(pk, 0) + 1
 
         # Reset per-call stats
         self.stats = {
@@ -166,6 +176,24 @@ class MinimaxAgent:
         if self.table is not None:
             self.stats["cache_hits"] = self.table.hit_count
             self.stats["cache_misses"] = self.table.miss_count
+
+        # --- Root-level cycle escape (action diversity) ---
+        # When we've been at this board config before AND we're about to reuse
+        # an action tried previously from here, force a less-used alternative.
+        # This fires AFTER the search so it never touches the alpha-beta logic.
+        current_count = self._game_history[pk]  # already incremented above
+        if current_count >= 2:
+            used = self._used_actions_from.get(pk, set())
+            if best_action in used:
+                for alt in actions:   # actions already priority-sorted
+                    if alt not in used:
+                        best_action = alt
+                        break  # take first fresh action
+        # Record which action we used from this position
+        if pk not in self._used_actions_from:
+            self._used_actions_from[pk] = set()
+        self._used_actions_from[pk].add(best_action)
+
         return best_action
 
     # -- iterative deepening ------------------------------------------------
@@ -273,14 +301,20 @@ class MinimaxAgent:
 
         # --- Leaf node: evaluate with heuristic ---
         if depth <= 0:
-            return evaluate(state, self.agent_name)
+            score = evaluate(state, self.agent_name)
+            # Penalise revisiting a real-game position (breaks oscillation loops)
+            count = self._game_history.get(self._position_key(state), 0)
+            if count > 0:
+                score -= 50.0 * count
+            return score
 
         # --- Transposition table lookup ---
         state_key: tuple = state.to_tuple()
         if self.table is not None:
-            cached: Optional[float] = self.table.get(state_key, depth)
-            if cached is not None:
-                return cached
+            tt_entry = self.table.get(state_key, depth)
+            if tt_entry is not None:
+                cached_score, _, _ = tt_entry
+                return cached_score
 
         # --- Recursive expansion ---
         actions: List[Action] = get_valid_actions(state)
@@ -308,6 +342,16 @@ class MinimaxAgent:
             self.table.store(state_key, depth, value)
 
         return value
+
+
+    def _position_key(self, state: GameState) -> tuple:
+        """Spatial-only key for cycle/repetition detection.
+
+        Uses only grid positions (not HP, energy, or cooldowns) so that
+        small per-tick fluctuations in those values don't prevent matching
+        a genuine spatial movement loop.
+        """
+        return (state.agent1.position, state.agent2.position)
 
 
 class _TimeoutSentinel(Exception):

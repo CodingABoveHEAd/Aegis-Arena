@@ -11,9 +11,11 @@ export const APIClient = {
   base: BASE,
 
   /** POST /new_game */
-  newGame: async (mode, humanSide = null) => {
+  newGame: async (mode, humanSide = null, algorithms = {}) => {
     const body = { mode };
     if (humanSide) body.human_side = humanSide;
+    if (algorithms.agent1_algorithm) body.agent1_algorithm = algorithms.agent1_algorithm;
+    if (algorithms.agent2_algorithm) body.agent2_algorithm = algorithms.agent2_algorithm;
     const res = await fetch(`${BASE}/new_game`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

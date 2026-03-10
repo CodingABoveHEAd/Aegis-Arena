@@ -1,10 +1,17 @@
 """Transposition Table — caches evaluated game states for search reuse.
 
-A transposition table stores ``(score, depth)`` pairs keyed by a fully
-hashable state tuple.  When the search encounters the same state again
-it can reuse the stored score *provided* the stored depth is at least
-as deep as the current request — a shallower stored result may be less
-accurate and should be ignored.
+A transposition table stores ``(score, depth, flag)`` triples keyed by
+a fully hashable state tuple.  The *flag* indicates how the score was
+obtained:
+
+* **EXACT** — the score is an exact minimax / negamax value.
+* **LOWER** — the score is a lower bound (failed high / β-cutoff).
+* **UPPER** — the score is an upper bound (failed low / α-cutoff).
+
+When the search encounters the same state again it can reuse the stored
+score *provided* the stored depth is at least as deep as the current
+request — a shallower stored result may be less accurate and should be
+ignored.
 
 The table also tracks hit / miss statistics so the caller can monitor
 cache effectiveness.
@@ -14,27 +21,32 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
 
+# Flag constants for transposition table entries
+EXACT: int = 0   # Exact minimax / negamax value
+LOWER: int = 1   # Lower bound (β-cutoff)
+UPPER: int = 2   # Upper bound (α-cutoff)
+
 
 class TranspositionTable:
     """Dictionary-backed transposition table with depth-aware lookups.
 
     Attributes:
         _store:     Internal mapping from state hash tuple to
-                    ``(score, depth)`` pairs.
+                    ``(score, depth, flag)`` triples.
         hit_count:  Number of successful cache lookups.
         miss_count: Number of failed cache lookups.
     """
 
     def __init__(self) -> None:
         """Create an empty transposition table."""
-        self._store: Dict[tuple, Tuple[float, int]] = {}
+        self._store: Dict[tuple, Tuple[float, int, int]] = {}
         self.hit_count: int = 0
         self.miss_count: int = 0
 
     # -- core operations ----------------------------------------------------
 
-    def get(self, state_hash: tuple, depth: int) -> Optional[float]:
-        """Retrieve a cached score if stored at sufficient depth.
+    def get(self, state_hash: tuple, depth: int) -> Optional[Tuple[float, int, int]]:
+        """Retrieve a cached entry if stored at sufficient depth.
 
         Args:
             state_hash: Hashable tuple representing the game state.
@@ -42,19 +54,19 @@ class TranspositionTable:
                         to be usable.
 
         Returns:
-            The cached evaluation score, or ``None`` if the state is
-            not stored or was evaluated at a shallower depth.
+            A ``(score, depth, flag)`` triple, or ``None`` if the state
+            is not stored or was evaluated at a shallower depth.
         """
         entry = self._store.get(state_hash)
         if entry is not None:
-            stored_score, stored_depth = entry
+            stored_score, stored_depth, stored_flag = entry
             if stored_depth >= depth:
                 self.hit_count += 1
-                return stored_score
+                return (stored_score, stored_depth, stored_flag)
         self.miss_count += 1
         return None
 
-    def store(self, state_hash: tuple, depth: int, score: float) -> None:
+    def store(self, state_hash: tuple, depth: int, score: float, flag: int = EXACT) -> None:
         """Store (or overwrite) a score for the given state.
 
         Overwrites only if the new depth is greater than or equal to
@@ -64,10 +76,11 @@ class TranspositionTable:
             state_hash: Hashable tuple representing the game state.
             depth:      Depth at which this score was computed.
             score:      The evaluation score.
+            flag:       One of ``EXACT``, ``LOWER``, ``UPPER``.
         """
         existing = self._store.get(state_hash)
         if existing is None or depth >= existing[1]:
-            self._store[state_hash] = (score, depth)
+            self._store[state_hash] = (score, depth, flag)
 
     def clear(self) -> None:
         """Remove all entries and reset statistics."""

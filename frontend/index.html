@@ -391,6 +391,31 @@
       margin-top: 20px;
     }
     .side-select.visible { display: flex; }
+    .algo-select {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .algo-select.visible { display: flex; }
+    .algo-btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .algo-btn {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 8px 18px;
+      border: 1px solid rgba(255,51,51,0.4);
+      border-radius: 4px;
+      background: rgba(255,51,51,0.06);
+      color: rgba(255,255,255,0.8);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .algo-btn:hover { box-shadow: 0 0 16px rgba(255,51,51,0.25); background: rgba(255,51,51,0.12); }
+    .algo-btn.selected { border-color: #ff3333; color: #ff3333; background: rgba(255,51,51,0.15); box-shadow: 0 0 12px rgba(255,51,51,0.3); }
     .side-select-title {
       font-size: 1rem;
       font-weight: 700;
@@ -511,8 +536,12 @@
       <div class="side-select-title">CHOOSE YOUR SIDE</div>
       <div class="side-btns">
         <button class="side-btn cyan" id="side-agent1">AGENT &#945; — MINIMAX — CYAN</button>
-        <button class="side-btn red" id="side-agent2">AGENT &#946; — MCTS — RED</button>
+        <button class="side-btn red" id="side-agent2">AGENT &#946; — RED</button>
       </div>
+    </div>
+    <div class="algo-select" id="algo-select">
+      <div class="side-select-title">AGENT &#946; ALGORITHM</div>
+      <div class="algo-btns" id="algo-btns"></div>
     </div>
   </div>
 

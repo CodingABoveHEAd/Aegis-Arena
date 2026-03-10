@@ -69,8 +69,8 @@ const actionPanel = new ActionPanel((action) => {
   if (controller) controller.handleHumanAction(action);
 });
 
-const menuScreen = new MenuScreen(async (mode, humanSide) => {
-  await controller.startGame(mode, humanSide);
+const menuScreen = new MenuScreen(async (mode, humanSide, algorithms) => {
+  await controller.startGame(mode, humanSide, algorithms);
 });
 
 // ─── Controller ──────────────────────────────────────────────────────
