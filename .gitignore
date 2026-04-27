@@ -1,3 +1,11 @@
 file_structure.txt
 __pycache__/
 *.pyc
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
