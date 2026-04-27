@@ -1,2 +1,9 @@
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r backend/requirements-dev.txt
+
 uvicorn backend.server:app --reload --port 8000
 python serve.py
+
+python -m pytest backend/test_game.py -v
